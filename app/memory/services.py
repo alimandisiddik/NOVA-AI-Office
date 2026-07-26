@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 
 from app.memory.database import MemoryDatabase
-from app.memory.models import ContinueContext, ProgressSummary, ResumeContext
+from app.memory.models import ContinueContext, ProgressSummary, ResumeContext, TaskStatusUpdate
 from app.memory.repositories import (
+    AmbiguousTaskError,
     InvalidMemoryValueError,
     MemoryRepository,
     TASK_STATUSES,
@@ -58,7 +59,16 @@ class WorkspaceMemoryService:
         return project, self.repository.list_tasks(project.id, status.strip().lower() if status else None)
 
     def update_task_status(self, task_id: int, status: str):
-        return self.repository.update_task_status(task_id, status.strip().lower())
+        task, _ = self.repository.update_task_status(task_id, status.strip().lower())
+        return task
+
+    def update_task_status_for_project(
+        self, project_name: str, task_identifier: str, status: str
+    ) -> TaskStatusUpdate:
+        project = self.get_project(self._safe_required(project_name, "Project name"))
+        task = self.repository.resolve_task(project.id, self._safe_required(task_identifier, "Task identifier"))
+        updated_task, previous_status = self.repository.update_task_status(task.id, status.strip().lower())
+        return TaskStatusUpdate(task=updated_task, previous_status=previous_status)
 
     def create_note(self, project_name: str, content: str):
         project = self.get_project(self._safe_required(project_name, "Project name"))
@@ -87,16 +97,23 @@ class WorkspaceMemoryService:
         ended_at: str | None = None,
     ):
         project = self.get_project(self._safe_required(project_name, "Project name"))
+        timestamp = utc_now()
         return self.repository.create_session(
             project.id,
             self._safe_required(summary, "Session summary"),
             self._safe_optional(completed_items),
             self._safe_optional(next_action),
-            started_at or utc_now(),
-            ended_at,
+            started_at or timestamp,
+            ended_at or timestamp,
         )
 
-    def progress(self, project_name: str) -> tuple[object, ProgressSummary, object | None]:
+    def list_recent_sessions(self, project_name: str, limit: int = 5):
+        if not 1 <= limit <= 10:
+            raise InvalidMemoryValueError("Session limit must be between 1 and 10")
+        project = self.get_project(self._safe_required(project_name, "Project name"))
+        return project, self.repository.list_recent_sessions(project.id, limit)
+
+    def progress(self, project_name: str):
         project = self.get_project(self._safe_required(project_name, "Project name"))
         counts = self.repository.task_counts(project.id)
         non_cancelled = sum(counts[status] for status in TASK_STATUSES if status != "cancelled")
@@ -112,28 +129,42 @@ class WorkspaceMemoryService:
                 completion_percentage=percentage,
             ),
             self.repository.latest_session(project.id),
+            self.repository.list_recent_completed_tasks(project.id, limit=1),
+            self.repository.list_doing_tasks(project.id, limit=5),
         )
 
     def resume(self, project_name: str) -> ResumeContext:
-        project, progress, _ = self.progress(project_name)
+        project, progress, _, recent_completed_tasks, doing_tasks = self.progress(project_name)
         return ResumeContext(
             project=project,
             progress=progress,
-            active_tasks=self.repository.list_tasks(project.id, "doing")[:5]
-            + self.repository.list_tasks(project.id, "todo")[:5],
+            active_tasks=doing_tasks + self.repository.list_tasks(project.id, "todo")[:5],
             notes=self.repository.list_notes(project.id, limit=3),
             decisions=self.repository.list_decisions(project.id, limit=3),
             latest_session=self.repository.latest_session(project.id),
+            recent_completed_tasks=recent_completed_tasks,
         )
 
     def continue_context(self, project_name: str) -> ContinueContext:
         project = self.get_project(self._safe_required(project_name, "Project name"))
-        unfinished = self.repository.list_tasks(project.id, "doing") + self.repository.list_tasks(project.id, "todo")
+        doing_tasks = self.repository.list_doing_tasks(project.id, limit=5)
+        todo_tasks = self.repository.list_tasks(project.id, "todo")
+        latest_session = self.repository.latest_session(project.id)
+        recommended_task = self.repository.choose_recommended_task(project.id, "doing")
+        if recommended_task is None:
+            recommended_task = self.repository.choose_recommended_task(project.id, "todo")
+        if latest_session and latest_session.next_action:
+            recommended_next_action = latest_session.next_action
+        elif recommended_task:
+            recommended_next_action = recommended_task.title
+        else:
+            recommended_next_action = "No pending action exists."
         return ContinueContext(
             project=project,
-            latest_session=self.repository.latest_session(project.id),
-            unfinished_tasks=unfinished[:5],
+            latest_session=latest_session,
+            unfinished_tasks=(doing_tasks + todo_tasks)[:5],
             decisions=self.repository.list_decisions(project.id, limit=3),
+            recommended_next_action=recommended_next_action,
         )
 
     @staticmethod

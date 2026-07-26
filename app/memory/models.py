@@ -30,6 +30,12 @@ class Task:
 
 
 @dataclass(frozen=True)
+class TaskStatusUpdate:
+    task: Task
+    previous_status: str
+
+
+@dataclass(frozen=True)
 class Note:
     id: int
     project_id: int
@@ -77,6 +83,7 @@ class ResumeContext:
     notes: list[Note]
     decisions: list[Decision]
     latest_session: WorkSession | None
+    recent_completed_tasks: list[Task]
 
 
 @dataclass(frozen=True)
@@ -85,3 +92,4 @@ class ContinueContext:
     latest_session: WorkSession | None
     unfinished_tasks: list[Task]
     decisions: list[Decision]
+    recommended_next_action: str

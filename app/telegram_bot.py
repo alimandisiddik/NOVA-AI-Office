@@ -23,13 +23,18 @@ from app.memory.formatters import (
     progress_message,
     projects_message,
     resume_message,
+    sessions_message,
     tasks_message,
 )
 from app.memory.repositories import (
+    AmbiguousTaskError,
     DuplicateProjectError,
     InvalidMemoryValueError,
+    InvalidTaskStatusError,
     MemoryError,
     ProjectNotFoundError,
+    TaskNotFoundError,
+    TaskStatusUnchangedError,
 )
 from app.memory.services import WorkspaceMemoryService
 from app.security import is_authorized_user
@@ -114,6 +119,15 @@ async def _memory_reply(
         response = "Project sudah ada. Gunakan nama project yang berbeda."
     except ProjectNotFoundError:
         response = "Project tidak ditemukan. Periksa nama project dan coba lagi."
+    except TaskNotFoundError:
+        response = "Task tidak ditemukan untuk project ini."
+    except AmbiguousTaskError as error:
+        matches = ", ".join(f"#{task.id}" for task in error.tasks)
+        response = f"Beberapa task memiliki judul ini: {matches}. Gunakan ID numerik pada /task_status."
+    except TaskStatusUnchangedError:
+        response = "Task status is already set. Tidak ada perubahan."
+    except InvalidTaskStatusError:
+        response = "Status task tidak valid. Gunakan: todo, doing, done, atau cancelled."
     except InvalidMemoryValueError as error:
         response = str(error)
     except ValueError:
@@ -187,6 +201,26 @@ async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await _memory_reply(update, context, operation)
 
 
+async def task_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    fields = _pipe_fields(_argument_text(context), 3, 3)
+    if fields is None:
+        await _memory_reply(update, context, lambda: "Usage: /task_status Nama Project | ID atau judul task | status")
+        return
+
+    def operation() -> str:
+        update_result = _memory(context).update_task_status_for_project(fields[0], fields[1], fields[2])
+        task = update_result.task
+        return (
+            "Task updated\n\n"
+            f"Project: {fields[0]}\n"
+            f"Task: {task.title}\n"
+            f"Previous status: {update_result.previous_status}\n"
+            f"New status: {task.status}"
+        )
+
+    await _memory_reply(update, context, operation)
+
+
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     fields = _pipe_fields(_argument_text(context), 1, 2)
     if fields is None:
@@ -223,6 +257,49 @@ async def decision_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return f"Decision stored for {fields[0]}."
 
     await _memory_reply(update, context, operation)
+
+
+async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    fields = _pipe_fields(_argument_text(context), 2, 4)
+    if fields is None:
+        await _memory_reply(
+            update,
+            context,
+            lambda: "Usage: /session Nama Project | summary | completed items | next action",
+        )
+        return
+
+    def operation() -> str:
+        session = _memory(context).create_session(
+            fields[0],
+            fields[1],
+            fields[2] if len(fields) >= 3 else "",
+            fields[3] if len(fields) == 4 else "",
+        )
+        lines = ["Work session recorded", "", f"Project: {fields[0]}", f"Summary: {session.summary}"]
+        if session.completed_items:
+            lines.append(f"Completed: {session.completed_items}")
+        if session.next_action:
+            lines.append(f"Next action: {session.next_action}")
+        return "\n".join(lines)
+
+    await _memory_reply(update, context, operation)
+
+
+async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    fields = _pipe_fields(_argument_text(context), 1, 2)
+    if fields is None:
+        await _memory_reply(update, context, lambda: "Usage: /sessions Nama Project | limit (1-10)")
+        return
+    if len(fields) == 2 and not fields[1].isdigit():
+        await _memory_reply(update, context, lambda: "Session limit must be a number from 1 to 10.")
+        return
+    limit = int(fields[1]) if len(fields) == 2 else 5
+    await _memory_reply(
+        update,
+        context,
+        lambda: sessions_message(*_memory(context).list_recent_sessions(fields[0], limit)),
+    )
 
 
 async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -278,9 +355,12 @@ def build_application(settings: Settings, memory: WorkspaceMemoryService) -> App
     application.add_handler(CommandHandler("project", project_command))
     application.add_handler(CommandHandler("projects", projects_command))
     application.add_handler(CommandHandler("task", task_command))
+    application.add_handler(CommandHandler("task_status", task_status_command))
     application.add_handler(CommandHandler("tasks", tasks_command))
     application.add_handler(CommandHandler("note", note_command))
     application.add_handler(CommandHandler("decision", decision_command))
+    application.add_handler(CommandHandler("session", session_command))
+    application.add_handler(CommandHandler("sessions", sessions_command))
     application.add_handler(CommandHandler("resume", resume_command))
     application.add_handler(CommandHandler("progress", progress_command))
     application.add_handler(CommandHandler("continue", continue_command))

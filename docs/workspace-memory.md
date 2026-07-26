@@ -1,5 +1,9 @@
 # Workspace Memory
 
+## Sprint 2.1 additions
+
+Sprint 2.1 adds Telegram-accessible task lifecycle management and work-session recording. The existing SQLite schema already contains `tasks.completed_at` and all required `sessions` fields, so no migration, table drop, or database reset is required. Existing Sprint 2 databases remain usable.
+
 ## Overview
 
 Sprint 2 adds a local SQLite Workspace Memory system to NOVA. It enables the authorized Telegram user to save work context and resume a project without reconstructing the prior state manually.
@@ -33,8 +37,11 @@ Pipe-separated fields are trimmed. Required fields cannot be empty.
 /projects
 /task <project name> | <task title> [| <priority>]
 /tasks <project name> [| <status>]
+/task_status <project name> | <task ID or exact title> | <todo|doing|done|cancelled>
 /note <project name> | <note content>
 /decision <project name> | <decision> [| <reason>]
+/session <project name> | <summary> [| <completed items> [| <next action>]]
+/sessions <project name> [| <limit 1-10>]
 /resume <project name>
 /progress <project name>
 /continue <project name>
@@ -45,12 +52,21 @@ Examples:
 ```text
 /project NOVA AI Office | Executive multi-agent office
 /task NOVA AI Office | Add SQLite test coverage | high
+/task_status NOVA AI Office | 3 | done
 /note NOVA AI Office | Workspace Memory uses local SQLite only.
 /decision NOVA AI Office | Keep Sprint 2 local-first | Cloud services are out of scope.
+/session NOVA AI Office | Sprint 2 completed | Telegram and unit tests passed | Prepare Sprint 2.1
+/sessions NOVA AI Office | 5
 /resume NOVA AI Office
 ```
 
-`/resume` returns project status, task progress, active tasks, recent notes and decisions, and the latest session. `/progress` calculates completion as `done / all non-cancelled tasks`, returning `0%` when no applicable tasks exist. `/continue` returns the latest session, unfinished tasks, recent decisions, and a recommended next action.
+`/tasks` displays task IDs. `/task_status` accepts an exact title case-insensitively or a numeric task ID. If an exact title has multiple matches, NOVA lists matching IDs and makes no change until the user retries with an ID.
+
+Supported task statuses are `todo`, `doing`, `done`, and `cancelled`. When a task becomes `done`, NOVA sets `completed_at` in UTC if it is empty. When a task moves away from `done`, NOVA clears it. A no-op status request returns a clear message.
+
+`/session` requires a project and summary; completed items and next action are optional. Telegram-created sessions use current UTC time for `started_at`, `ended_at`, and `created_at`. `/sessions` defaults to five newest-first items and accepts a limit from 1 to 10.
+
+`/resume` returns project status, task progress, doing/todo work, recently completed tasks, notes, decisions, and the latest session context. `/progress` calculates completion as `done / all non-cancelled tasks`, returning `0%` when no applicable tasks exist. `/continue` recommends work in this order: latest session next action, a priority-ranked `doing` task, a priority-ranked `todo` task, or a no-pending-action message.
 
 ## Backup and restore
 
@@ -74,5 +90,5 @@ To reset Workspace Memory, stop NOVA and delete the configured database file. Al
 
 - Workspace Memory is local to one machine and one database file.
 - There is no cloud synchronization, multi-user collaboration, or external tool integration.
-- Sprint 2 records work sessions through the service layer; there is no dedicated Telegram session-creation command yet.
-- The text fields are intentionally plain text and do not inspect or redact content entered by the user.
+- Session recording is append-only; there is no edit or delete workflow in Sprint 2.1.
+- Task due dates are stored in the schema but are not yet exposed through Telegram commands.

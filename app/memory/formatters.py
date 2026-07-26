@@ -28,11 +28,11 @@ def tasks_message(project, tasks) -> str:
         return f"Tidak ada task untuk {project.name}. Buat dengan: /task {project.name} | judul task"
     lines = [f"Tasks — {project.name}"]
     for task in tasks:
-        lines.append(f"{TASK_MARKERS[task.status]} [{task.status}] {task.title} ({task.priority})")
+        lines.append(f"#{task.id} {TASK_MARKERS[task.status]} [{task.status}] {task.title} ({task.priority})")
     return "\n".join(lines)
 
 
-def progress_message(project, progress: ProgressSummary, latest_session) -> str:
+def progress_message(project, progress: ProgressSummary, latest_session, recent_completed_tasks, doing_tasks) -> str:
     lines = [
         f"Progress — {project.name}",
         f"Total: {progress.total}",
@@ -41,6 +41,10 @@ def progress_message(project, progress: ProgressSummary, latest_session) -> str:
     ]
     if latest_session and latest_session.next_action:
         lines.append(f"Next action: {latest_session.next_action}")
+    if recent_completed_tasks:
+        lines.append(f"Most recent completed: {recent_completed_tasks[0].title}")
+    if doing_tasks:
+        lines.append("Doing: " + "; ".join(task.title for task in doing_tasks[:5]))
     return "\n".join(lines)
 
 
@@ -58,8 +62,12 @@ def resume_message(context: ResumeContext) -> str:
         lines.append("Recent decisions: " + " | ".join(decision.decision for decision in context.decisions[:3]))
     if context.latest_session:
         lines.append(f"Latest session: {context.latest_session.summary}")
+        if context.latest_session.completed_items:
+            lines.append(f"Latest completed: {context.latest_session.completed_items}")
         if context.latest_session.next_action:
             lines.append(f"Next action: {context.latest_session.next_action}")
+    if context.recent_completed_tasks:
+        lines.append("Recently completed: " + "; ".join(task.title for task in context.recent_completed_tasks[:3]))
     return "\n".join(lines)
 
 
@@ -75,8 +83,24 @@ def continue_message(context: ContinueContext) -> str:
         lines.append("Unfinished: " + "; ".join(task.title for task in context.unfinished_tasks[:5]))
     if context.decisions:
         lines.append("Latest decisions: " + " | ".join(item.decision for item in context.decisions[:3]))
-    if context.latest_session and context.latest_session.next_action:
-        lines.append(f"Recommended next action: {context.latest_session.next_action}")
-    elif context.unfinished_tasks:
-        lines.append(f"Recommended next action: {context.unfinished_tasks[0].title}")
+    lines.append(f"Recommended next action: {context.recommended_next_action}")
     return "\n".join(lines)
+
+
+def sessions_message(project, sessions) -> str:
+    if not sessions:
+        return f"No sessions for {project.name}. Record one with: /session {project.name} | summary"
+    lines = [f"Recent sessions — {project.name}"]
+    for index, session in enumerate(sessions, start=1):
+        timestamp = session.started_at.replace("T", " ").replace("Z", " UTC")
+        lines.append(f"\n{index}. {timestamp}")
+        lines.append(f"   Summary: {_truncate(session.summary)}")
+        if session.completed_items:
+            lines.append(f"   Completed: {_truncate(session.completed_items)}")
+        if session.next_action:
+            lines.append(f"   Next: {_truncate(session.next_action)}")
+    return "\n".join(lines)
+
+
+def _truncate(value: str, limit: int = 180) -> str:
+    return value if len(value) <= limit else f"{value[: limit - 1]}…"

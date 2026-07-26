@@ -2,9 +2,9 @@
 
 NOVA AI Office is the project foundation for an executive multi-agent AI office: a governed workspace where specialized agents, services, workflows, prompts, and institutional knowledge can be introduced deliberately over time.
 
-## Sprint 2 status
+## Sprint 2.1 status
 
-NOVA now includes a local-only Telegram bot and SQLite-backed Workspace Memory for the configured owner. Workspace Memory stores projects, tasks, notes, decisions, and work sessions on the local machine. NOVA intentionally includes no cloud services, AI provider SDKs, credentials in source control, or business automation.
+NOVA now includes a local-only Telegram bot and SQLite-backed Workspace Memory for the configured owner. Sprint 2.1 adds practical task-status updates and Telegram-accessible work-session recording. NOVA intentionally includes no cloud services, AI provider SDKs, credentials in source control, or business automation.
 
 ## Repository layout
 
@@ -67,13 +67,20 @@ See [Workspace Memory](docs/workspace-memory.md) for the architecture, command g
 | `/projects` | List projects | `/projects` |
 | `/task` | Create a task | `/task NOVA AI Office | Build Workspace Memory | high` |
 | `/tasks` | List project tasks | `/tasks NOVA AI Office | doing` |
+| `/task_status` | Change a task status by ID or exact title | `/task_status NOVA AI Office | 3 | done` |
 | `/note` | Store a note | `/note NOVA AI Office | SQLite selected for local memory.` |
 | `/decision` | Store a decision | `/decision NOVA AI Office | Use SQLite | Local-first scope` |
+| `/session` | Record a completed work session | `/session NOVA AI Office | Tests passed | 19 tests | Review changes` |
+| `/sessions` | List recent work sessions | `/sessions NOVA AI Office | 5` |
 | `/resume` | Summarize project context | `/resume NOVA AI Office` |
 | `/progress` | Show task completion | `/progress NOVA AI Office` |
 | `/continue` | Show actionable recent context | `/continue NOVA AI Office` |
 
 Existing Sprint 1 commands remain available: `/start`, `/help`, and `/status`.
+
+Task statuses are `todo`, `doing`, `done`, and `cancelled`. Use a numeric task ID when duplicate task titles exist; `/tasks` displays each ID. A completed timestamp is set in UTC when a task becomes `done` and cleared when it is reopened.
+
+`/session` accepts a project and summary, with optional completed items and next action. `/sessions` defaults to five entries and accepts a limit from 1 to 10. `/continue` selects its recommended next action in this order: the latest session action, a priority-ranked `doing` task, a priority-ranked `todo` task, then a no-pending-action message.
 
 ## Backup and reset
 

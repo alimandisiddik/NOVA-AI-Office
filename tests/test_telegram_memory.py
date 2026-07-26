@@ -15,9 +15,13 @@ from app.telegram_bot import (
     project_command,
     projects_command,
     resume_command,
+    session_command,
+    sessions_command,
     start,
     status,
     task_command,
+    task_status_command,
+    tasks_command,
 )
 
 
@@ -60,17 +64,50 @@ def test_telegram_memory_commands_and_sprint_one_compatibility(tmp_path) -> None
         FakeUpdate(7),
         context(memory, ["NOVA", "AI", "Office", "|", "Workspace", "Memory"]),
     )
+    assert "No sessions" in run(
+        sessions_command, FakeUpdate(7), context(memory, ["NOVA", "AI", "Office"])
+    )
     assert "Task created" in run(
         task_command,
         FakeUpdate(7),
         context(memory, ["NOVA", "AI", "Office", "|", "Build", "database", "|", "high"]),
     )
+    assert "#1" in run(
+        tasks_command, FakeUpdate(7), context(memory, ["NOVA", "AI", "Office"])
+    )
+    assert "Task updated" in run(
+        task_status_command,
+        FakeUpdate(7),
+        context(memory, ["NOVA", "AI", "Office", "|", "1", "|", "doing"]),
+    )
+    assert "Status task tidak valid" in run(
+        task_status_command,
+        FakeUpdate(7),
+        context(memory, ["NOVA", "AI", "Office", "|", "1", "|", "blocked"]),
+    )
+    assert "Usage" in run(task_status_command, FakeUpdate(7), context(memory, []))
     assert "Decision stored" in run(
         decision_command,
         FakeUpdate(7),
         context(memory, ["NOVA", "AI", "Office", "|", "Use", "SQLite"]),
     )
-    memory.create_session("NOVA AI Office", "Database ready", "Schema", "Add tests")
+    assert "Work session recorded" in run(
+        session_command,
+        FakeUpdate(7),
+        context(memory, ["NOVA", "AI", "Office", "|", "Database", "ready"]),
+    )
+    assert "Work session recorded" in run(
+        session_command,
+        FakeUpdate(7),
+        context(memory, ["NOVA", "AI", "Office", "|", "Tests", "passed", "|", "All", "done", "|", "Add", "review"]),
+    )
+    assert "Usage" in run(session_command, FakeUpdate(7), context(memory, []))
+    assert "Recent sessions" in run(
+        sessions_command, FakeUpdate(7), context(memory, ["NOVA", "AI", "Office"])
+    )
+    assert "Recent sessions" in run(
+        sessions_command, FakeUpdate(7), context(memory, ["NOVA", "AI", "Office", "|", "1"])
+    )
     assert "Resume — NOVA AI Office" in run(
         resume_command, FakeUpdate(7), context(memory, ["NOVA", "AI", "Office"])
     )
@@ -92,3 +129,20 @@ def test_unauthorized_telegram_user_cannot_access_memory(tmp_path) -> None:
 
     assert run(projects_command, FakeUpdate(99), context(memory)) == UNAUTHORIZED_MESSAGE
     assert memory.list_projects() == []
+
+
+def test_task_status_ambiguous_title_requires_numeric_id(tmp_path) -> None:
+    memory = WorkspaceMemoryService(MemoryDatabase(tmp_path / "memory.sqlite3"))
+    memory.initialize()
+    memory.create_project("NOVA")
+    memory.create_task("NOVA", "Duplicate")
+    memory.create_task("NOVA", "Duplicate")
+
+    response = run(
+        task_status_command,
+        FakeUpdate(7),
+        context(memory, ["NOVA", "|", "Duplicate", "|", "doing"]),
+    )
+
+    assert "Beberapa task" in response
+    assert "#1" in response and "#2" in response

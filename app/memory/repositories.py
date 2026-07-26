@@ -29,6 +29,26 @@ class InvalidMemoryValueError(MemoryError):
     """Raised when a domain status, priority, or required value is invalid."""
 
 
+class InvalidTaskStatusError(InvalidMemoryValueError):
+    """Raised when a task status is not supported."""
+
+
+class TaskNotFoundError(MemoryError):
+    """Raised when a requested task does not exist for the project."""
+
+
+class AmbiguousTaskError(MemoryError):
+    """Raised when an exact task title identifies more than one task."""
+
+    def __init__(self, tasks: list[Task]) -> None:
+        super().__init__("Multiple tasks match this title")
+        self.tasks = tasks
+
+
+class TaskStatusUnchangedError(MemoryError):
+    """Raised when a requested task status is already set."""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -129,7 +149,7 @@ class MemoryRepository:
 
     def list_tasks(self, project_id: int, status: str | None = None) -> list[Task]:
         if status is not None and status not in TASK_STATUSES:
-            raise InvalidMemoryValueError("Invalid task status")
+            raise InvalidTaskStatusError("Invalid task status")
         if status is None:
             return self._many("SELECT * FROM tasks WHERE project_id = ? ORDER BY id DESC", (project_id,), _task)
         return self._many(
@@ -138,20 +158,54 @@ class MemoryRepository:
             _task,
         )
 
-    def update_task_status(self, task_id: int, status: str) -> Task:
-        if status not in TASK_STATUSES:
-            raise InvalidMemoryValueError("Invalid task status")
-        now = utc_now()
-        completed_at = now if status == "done" else None
+    def get_task_by_id(self, project_id: int, task_id: int) -> Task:
         with self.database.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE id = ? AND project_id = ?", (task_id, project_id)
+            ).fetchone()
+        if row is None:
+            raise TaskNotFoundError("Task not found")
+        return _task(row)
+
+    def find_tasks_by_exact_title(self, project_id: int, title: str) -> list[Task]:
+        return self._many(
+            "SELECT * FROM tasks WHERE project_id = ? AND title = ? COLLATE NOCASE ORDER BY id ASC",
+            (project_id, title),
+            _task,
+        )
+
+    def resolve_task(self, project_id: int, identifier: str) -> Task:
+        if identifier.isdigit():
+            return self.get_task_by_id(project_id, int(identifier))
+        matches = self.find_tasks_by_exact_title(project_id, identifier)
+        if not matches:
+            raise TaskNotFoundError("Task not found")
+        if len(matches) > 1:
+            raise AmbiguousTaskError(matches)
+        return matches[0]
+
+    def update_task_status(self, task_id: int, status: str) -> tuple[Task, str]:
+        if status not in TASK_STATUSES:
+            raise InvalidTaskStatusError("Invalid task status")
+        now = utc_now()
+        with self.database.connection() as connection:
+            existing = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if existing is None:
+                raise TaskNotFoundError("Task not found")
+            previous_status = existing["status"]
+            if previous_status == status:
+                raise TaskStatusUnchangedError("Task status is already set")
+            completed_at = existing["completed_at"]
+            if status == "done" and completed_at is None:
+                completed_at = now
+            elif status != "done":
+                completed_at = None
             cursor = connection.execute(
                 "UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
                 (status, now, completed_at, task_id),
             )
-            if cursor.rowcount == 0:
-                raise InvalidMemoryValueError("Task not found")
             row = connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        return _task(row)
+        return _task(row), previous_status
 
     def task_counts(self, project_id: int) -> dict[str, int]:
         counts = {status: 0 for status in TASK_STATUSES}
@@ -162,6 +216,33 @@ class MemoryRepository:
         for row in rows:
             counts[row["status"]] = row["count"]
         return counts
+
+    def list_recent_completed_tasks(self, project_id: int, limit: int = 3) -> list[Task]:
+        return self._many(
+            "SELECT * FROM tasks WHERE project_id = ? AND status = 'done' "
+            "ORDER BY completed_at DESC, id DESC LIMIT ?",
+            (project_id, limit),
+            _task,
+        )
+
+    def list_doing_tasks(self, project_id: int, limit: int = 5) -> list[Task]:
+        return self._many(
+            "SELECT * FROM tasks WHERE project_id = ? AND status = 'doing' "
+            "ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END, "
+            "created_at ASC, id ASC LIMIT ?",
+            (project_id, limit),
+            _task,
+        )
+
+    def choose_recommended_task(self, project_id: int, status: str) -> Task | None:
+        with self.database.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE project_id = ? AND status = ? "
+                "ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END, "
+                "created_at ASC, id ASC LIMIT 1",
+                (project_id, status),
+            ).fetchone()
+        return _task(row) if row else None
 
     def create_note(self, project_id: int, content: str) -> Note:
         now = utc_now()
@@ -230,6 +311,13 @@ class MemoryRepository:
                 "SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC, id DESC LIMIT 1", (project_id,)
             ).fetchone()
         return _session(row) if row else None
+
+    def list_recent_sessions(self, project_id: int, limit: int) -> list[WorkSession]:
+        return self._many(
+            "SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+            (project_id, limit),
+            _session,
+        )
 
     def _many(self, query: str, params: tuple[object, ...], factory):
         with self.database.connection() as connection:

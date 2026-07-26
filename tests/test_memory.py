@@ -66,7 +66,7 @@ def test_tasks_list_filter_progress_and_completion_timestamp(memory) -> None:
     memory.update_task_status(cancelled.id, "cancelled")
 
     _, doing_tasks = memory.list_tasks("NOVA", "doing")
-    _, progress, _ = memory.progress("NOVA")
+    _, progress, *_ = memory.progress("NOVA")
 
     assert [task.id for task in doing_tasks] == [doing.id]
     assert completed.completed_at is not None and completed.completed_at.endswith("Z")
