@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nova-ai-office"
+version = "0.1.0"
+description = "Foundation for NOVA, an executive multi-agent AI office."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "NOVA AI Office Team" },
+]
+dependencies = [
+  "python-dotenv>=1.0,<2.0",
+  "python-telegram-bot>=22.0,<23.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
