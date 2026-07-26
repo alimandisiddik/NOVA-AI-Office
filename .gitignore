@@ -39,6 +39,11 @@ tokens/
 
 # Project runtime artifacts
 logs/
-data/
 artifacts/
 private_outputs/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal

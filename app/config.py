@@ -21,6 +21,7 @@ class Settings:
     telegram_bot_token: str
     telegram_allowed_user_id: int
     nova_env: str
+    nova_memory_db_path: Path
 
 
 def _repository_env_file() -> Path:
@@ -43,6 +44,9 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     token = _required_value(environment, "TELEGRAM_BOT_TOKEN")
     allowed_user_id_raw = _required_value(environment, "TELEGRAM_ALLOWED_USER_ID")
     nova_env = _required_value(environment, "NOVA_ENV")
+    memory_path = environment.get("NOVA_MEMORY_DB_PATH", "data/nova_memory.db").strip()
+    if not memory_path:
+        raise ConfigurationError("NOVA_MEMORY_DB_PATH must not be empty")
 
     try:
         allowed_user_id = int(allowed_user_id_raw)
@@ -58,4 +62,5 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         telegram_bot_token=token,
         telegram_allowed_user_id=allowed_user_id,
         nova_env=nova_env,
+        nova_memory_db_path=(Path(memory_path) if Path(memory_path).is_absolute() else _repository_env_file().parent / memory_path),
     )

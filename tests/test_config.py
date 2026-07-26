@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from app.config import ConfigurationError, load_settings
 
@@ -41,3 +42,13 @@ def test_valid_configuration_is_loaded() -> None:
     assert settings.telegram_bot_token == "test-token"
     assert settings.telegram_allowed_user_id == 123456789
     assert settings.nova_env == "test"
+    assert settings.nova_memory_db_path == Path(__file__).resolve().parent.parent / "data/nova_memory.db"
+
+
+def test_configurable_memory_database_path_is_loaded() -> None:
+    environment = valid_environment()
+    environment["NOVA_MEMORY_DB_PATH"] = "runtime/workspace.sqlite3"
+
+    settings = load_settings(environment)
+
+    assert settings.nova_memory_db_path == Path(__file__).resolve().parent.parent / "runtime/workspace.sqlite3"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.config import ConfigurationError, load_settings
+from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.telegram_bot import build_application
 
 
@@ -30,7 +31,14 @@ def main() -> int:
         return 1
 
     logger.info("Starting NOVA local Telegram bot.")
-    application = build_application(settings)
+    memory = WorkspaceMemoryService(MemoryDatabase(settings.nova_memory_db_path))
+    try:
+        memory.initialize()
+    except MemoryDatabaseError:
+        logger.error("Workspace Memory initialization failed.")
+        return 1
+
+    application = build_application(settings, memory)
     application.run_polling()
     return 0
 
