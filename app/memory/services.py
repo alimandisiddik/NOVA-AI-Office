@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import re
-
 from app.memory.database import MemoryDatabase
+from app.security import SENSITIVE_CONTENT_PATTERN
 from app.memory.models import ContinueContext, ProgressSummary, ResumeContext, TaskStatusUpdate
 from app.memory.repositories import (
     AmbiguousTaskError,
@@ -12,13 +11,6 @@ from app.memory.repositories import (
     MemoryRepository,
     TASK_STATUSES,
     utc_now,
-)
-
-SENSITIVE_CONTENT_PATTERN = re.compile(
-    r"(?:telegram_bot_token|api[_ -]?key|password|credential|secret|"
-    r"authorization\s*:|bearer\s+|begin [a-z ]*private key|"
-    r"^\s*[A-Z][A-Z0-9_]{2,}\s*=)",
-    re.IGNORECASE,
 )
 
 

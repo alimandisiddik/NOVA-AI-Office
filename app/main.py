@@ -6,6 +6,7 @@ import logging
 
 from app.config import ConfigurationError, load_settings
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
+from app.execution.service import ExecutionService
 from app.telegram_bot import build_application
 
 
@@ -38,7 +39,14 @@ def main() -> int:
         logger.error("Workspace Memory initialization failed.")
         return 1
 
-    application = build_application(settings, memory)
+    execution_svc = ExecutionService(MemoryDatabase(settings.nova_memory_db_path), settings.telegram_allowed_user_id)
+    try:
+        execution_svc.initialize()
+    except MemoryDatabaseError:
+        logger.error("Execution schema initialization failed.")
+        return 1
+
+    application = build_application(settings, memory, execution_svc)
     application.run_polling()
     return 0
 
