@@ -53,6 +53,8 @@ from app.execution.repository import (
     ExecutionNotFoundError,
     InvalidTransitionError,
 )
+from app.providers.service import ProviderGatewayService
+from app.providers.errors import ProviderError
 from app.execution.formatters import (
     execution_approved_message,
     execution_cancelled_message,
@@ -100,6 +102,9 @@ def _settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 def _memory(context: ContextTypes.DEFAULT_TYPE) -> WorkspaceMemoryService:
     return cast(WorkspaceMemoryService, context.application.bot_data["memory"])
 
+
+def _provider_svc(context: ContextTypes.DEFAULT_TYPE) -> ProviderGatewayService | None:
+    return context.application.bot_data.get("provider")
 
 def _execution_svc(context: ContextTypes.DEFAULT_TYPE) -> ExecutionService:
     return cast(ExecutionService, context.application.bot_data["execution"])
@@ -565,6 +570,63 @@ async def router_status_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
     await effective_message.reply_text(format_router_status(list_roles(), list_workflows()))
 
+async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Read-only text generation via the provider gateway: /ask <instruction>"""
+    if not await _require_authorized_user(update, context):
+        return
+    effective_message = update.effective_message
+    if effective_message is None:
+        return
+    instruction = _argument_text(context)
+    if not instruction:
+        await effective_message.reply_text("Usage: /ask <pertanyaan/instruksi>")
+        return
+
+    provider = _provider_svc(context)
+    if not provider:
+        await effective_message.reply_text("Provider Gateway belum dikonfigurasi.")
+        return
+
+    user_id = update.effective_user.id if update.effective_user else 0
+    await effective_message.reply_chat_action("typing")
+    try:
+        response_text = await provider.generate_text(instruction, user_id)
+        await effective_message.reply_text(response_text)
+    except ProviderError as exc:
+        await effective_message.reply_text(f"Gagal: {exc}")
+    except Exception as exc:
+        LOGGER.error("ask_command failed unexpectedly.", exc_info=True)
+        await effective_message.reply_text("Terjadi kesalahan internal. Coba lagi nanti.")
+
+async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show safe configuration status for the provider gateway."""
+    if not await _require_authorized_user(update, context):
+        return
+    effective_message = update.effective_message
+    if effective_message is None:
+        return
+
+    provider = _provider_svc(context)
+    if not provider:
+        await effective_message.reply_text("Provider Gateway: Not Configured")
+        return
+
+    # Mask base URL hostname but keep scheme to show HTTPS
+    from urllib.parse import urlparse
+    parsed = urlparse(provider.base_url)
+    safe_url = f"{parsed.scheme}://***" if parsed.scheme else "***"
+
+    cb_state = provider.circuit_breaker.state.upper()
+    lines = [
+        "🌐 Provider Gateway Status",
+        "",
+        f"URL: {safe_url}",
+        f"Circuit Breaker: {cb_state}",
+        f"Default Model: {provider.default_model}",
+        f"Allowed Models: {', '.join(provider.allowed_models)}",
+    ]
+    await effective_message.reply_text("\n".join(lines))
+
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Record a generic failure without leaking update data, credentials, or tokens."""
     del update, context
@@ -575,12 +637,14 @@ def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
     execution: ExecutionService | None = None,
+    provider: ProviderGatewayService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.bot_data["settings"] = settings
     application.bot_data["memory"] = memory
     application.bot_data["execution"] = execution
+    application.bot_data["provider"] = provider
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status))
@@ -603,6 +667,8 @@ def build_application(
     application.add_handler(CommandHandler("runapprove", runapprove_command))
     application.add_handler(CommandHandler("runstatus", runstatus_command))
     application.add_handler(CommandHandler("cancelrun", cancelrun_command))
+    application.add_handler(CommandHandler("ask", ask_command))
+    application.add_handler(CommandHandler("providerstatus", providerstatus_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_error_handler(handle_error)
     return application

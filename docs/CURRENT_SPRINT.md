@@ -6,12 +6,12 @@
 
 ---
 
-## Sprint 3 — Execution Orchestration
+## Sprint 4A — Secure Provider Gateway
 
 | Field | Value |
 |---|---|
 | **Status** | ✅ Complete — 2026-08-06 (corrective pass applied) |
-| **Version target** | 3.0.0 |
+| **Version target** | 4.0.0 |
 | **Owner** | NOVA AI Office |
 
 ---
@@ -48,6 +48,7 @@ for both the router commands (`/route`, `/plan`) and the execution service
 | **3A** | Provider-agnostic model router (`app/router/`): classifier, risk engine, planner, roles, workflows; 77 new tests | ✅ Done |
 | **3** | Execution orchestration (`app/execution/`): schema, repository, service, adapter, formatters; 85 new tests | ✅ Done |
 | **3 corrective** | Strengthened risk patterns, shared `SENSITIVE_CONTENT_PATTERN`, service-layer limit enforcement, per-execution reconcile audit, auth-before-usage in route/plan handlers, Indonesian wording | ✅ Done |
+| **4A** | Read-only Provider Gateway via `httpx`, NineRouter adapter, `/ask` & `/providerstatus`, audit schema, circuit breaker, retry bounds | ✅ Done |
 
 ---
 

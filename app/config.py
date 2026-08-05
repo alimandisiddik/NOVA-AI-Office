@@ -22,6 +22,10 @@ class Settings:
     telegram_allowed_user_id: int
     nova_env: str
     nova_memory_db_path: Path
+    nova_provider_base_url: str = ""
+    nova_provider_api_key: str = ""
+    nova_provider_default_model: str = ""
+    nova_provider_allowed_models: list[str] = None
 
 
 def _repository_env_file() -> Path:
@@ -58,9 +62,22 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     if allowed_user_id <= 0:
         raise ConfigurationError("TELEGRAM_ALLOWED_USER_ID must be a positive integer")
 
+    # Provider config is optional at the global settings level so tests/components
+    # without provider can run, but ProviderGatewayService validates it heavily.
+    provider_base = environment.get("NOVA_PROVIDER_BASE_URL", "").strip()
+    provider_key = environment.get("NOVA_PROVIDER_API_KEY", "").strip()
+    provider_default = environment.get("NOVA_PROVIDER_DEFAULT_MODEL", "").strip()
+    provider_allowed = environment.get("NOVA_PROVIDER_ALLOWED_MODELS", "").strip()
+
+    allowed_list = [m.strip() for m in provider_allowed.split(",") if m.strip()] if provider_allowed else []
+
     return Settings(
         telegram_bot_token=token,
         telegram_allowed_user_id=allowed_user_id,
         nova_env=nova_env,
         nova_memory_db_path=(Path(memory_path) if Path(memory_path).is_absolute() else _repository_env_file().parent / memory_path),
+        nova_provider_base_url=provider_base,
+        nova_provider_api_key=provider_key,
+        nova_provider_default_model=provider_default,
+        nova_provider_allowed_models=allowed_list if allowed_list else ([],) [0],
     )

@@ -7,6 +7,10 @@ import logging
 from app.config import ConfigurationError, load_settings
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.execution.service import ExecutionService
+from app.providers.errors import ConfigurationError as ProviderConfigurationError
+from app.providers.ninerouter import NineRouterAdapter
+from app.providers.repository import ProviderRepository
+from app.providers.service import ProviderGatewayService
 from app.telegram_bot import build_application
 
 
@@ -46,7 +50,24 @@ def main() -> int:
         logger.error("Execution schema initialization failed.")
         return 1
 
-    application = build_application(settings, memory, execution_svc)
+    provider_svc: ProviderGatewayService | None = None
+    if settings.nova_provider_base_url and settings.nova_provider_api_key:
+        adapter = NineRouterAdapter(settings.nova_provider_base_url, settings.nova_provider_api_key)
+        provider_svc = ProviderGatewayService(
+            ProviderRepository(MemoryDatabase(settings.nova_memory_db_path)),
+            adapter,
+            settings.nova_provider_base_url,
+            settings.nova_provider_api_key,
+            settings.nova_provider_default_model,
+            settings.nova_provider_allowed_models,
+        )
+        try:
+            provider_svc.initialize()
+        except (MemoryDatabaseError, ProviderConfigurationError):
+            logger.error("Provider Gateway initialization failed; continuing without it.")
+            provider_svc = None
+
+    application = build_application(settings, memory, execution_svc, provider_svc)
     application.run_polling()
     return 0
 
