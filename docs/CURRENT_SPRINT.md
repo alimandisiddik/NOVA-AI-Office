@@ -6,6 +6,26 @@
 
 ---
 
+## Sprint 6A.0 — Dissertation Workspace Foundation
+
+| Field | Value |
+|---|---|
+| **Status** | ✅ Complete — 2026-08-06 |
+| **Version target** | 6A.0 |
+| **Owner** | NOVA AI Office |
+
+Local, deterministic dissertation-workspace metadata is available through
+`app/dissertation/`. The shared SQLite database now has additive records for
+ordered chapters and subchapters, append-only SHA-256 document-version
+metadata with `original → working → reviewed → approved` states, paragraph
+maps, review-job lifecycle state, and revision logs.
+
+This sprint deliberately adds no Telegram command, Google Drive access,
+document transformation, citation integration, AI rewriting, or model review.
+Raw document and paragraph content are not stored in the database.
+
+---
+
 ## Sprint 4B — Deterministic Provider Model Fallback
 
 | Field | Value |

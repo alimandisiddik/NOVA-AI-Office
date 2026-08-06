@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.config import ConfigurationError, load_settings
+from app.dissertation.service import DissertationService
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.execution.service import ExecutionService
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
@@ -41,6 +42,13 @@ def main() -> int:
         memory.initialize()
     except MemoryDatabaseError:
         logger.error("Workspace Memory initialization failed.")
+        return 1
+
+    dissertation = DissertationService(MemoryDatabase(settings.nova_memory_db_path))
+    try:
+        dissertation.initialize()
+    except MemoryDatabaseError:
+        logger.error("Dissertation Workspace initialization failed.")
         return 1
 
     execution_svc = ExecutionService(MemoryDatabase(settings.nova_memory_db_path), settings.telegram_allowed_user_id)
