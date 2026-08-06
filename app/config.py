@@ -28,6 +28,11 @@ class Settings:
     nova_provider_default_model: str = ""
     nova_provider_allowed_models: list[str] = None
 
+    # Google Workspace Settings (Optional at startup)
+    google_client_secrets_path: Path | None = None
+    google_token_storage_path: Path | None = None
+    google_oauth_port: int = 0
+
 
 def _repository_env_file() -> Path:
     return Path(__file__).resolve().parent.parent / ".env"
@@ -74,6 +79,23 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     allowed_list = [m.strip() for m in provider_allowed.split(",") if m.strip()] if provider_allowed else []
     priority_list = [m.strip() for m in provider_priority.split(",") if m.strip()] if provider_priority else []
 
+    # Google Workspace Config
+    google_secrets = environment.get("GOOGLE_CLIENT_SECRETS_PATH", "").strip()
+    google_token = environment.get("GOOGLE_TOKEN_STORAGE_PATH", "").strip()
+    google_port_raw = environment.get("GOOGLE_OAUTH_PORT", "0").strip()
+
+    try:
+        google_port = int(google_port_raw)
+    except ValueError as error:
+        raise ConfigurationError("GOOGLE_OAUTH_PORT must be an integer") from error
+    if not 0 <= google_port <= 65535:
+        raise ConfigurationError("GOOGLE_OAUTH_PORT must be between 0 and 65535")
+
+    if bool(google_secrets) != bool(google_token):
+        raise ConfigurationError(
+            "GOOGLE_CLIENT_SECRETS_PATH and GOOGLE_TOKEN_STORAGE_PATH must be configured together"
+        )
+
     return Settings(
         telegram_bot_token=token,
         telegram_allowed_user_id=allowed_user_id,
@@ -84,4 +106,7 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         nova_provider_model_priority=priority_list if priority_list else ([],) [0],
         nova_provider_default_model=provider_default,
         nova_provider_allowed_models=allowed_list if allowed_list else ([],) [0],
+        google_client_secrets_path=Path(google_secrets) if google_secrets else None,
+        google_token_storage_path=Path(google_token) if google_token else None,
+        google_oauth_port=google_port,
     )
