@@ -26,6 +26,9 @@ from app.memory.formatters import (
     sessions_message,
     tasks_message,
 )
+from app.nightshift.service import NightShiftService
+from app.control_tower.service import ControlTowerService
+from app.control_tower.repository import ControlTowerError, InvalidCategoryError, ValidationError
 from app.memory.repositories import (
     AmbiguousTaskError,
     DuplicateProjectError,
@@ -75,6 +78,7 @@ HELP_MESSAGE: Final = (
     "Perintah NOVA:\n"
     "/start, /help, /status\n"
     "/project, /projects, /task, /tasks, /note, /decision\n"
+    "/capture, /today, /approvals, /shutdown, /morning\n"
     "/resume, /progress, /continue\n"
     "/route <pesan> — klasifikasi cepat\n"
     "/plan <pesan> — rencana eksekusi lengkap\n"
@@ -333,17 +337,42 @@ async def note_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def decision_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fields = _pipe_fields(_argument_text(context), 2, 3)
-    if fields is None:
-        await _memory_reply(update, context, lambda: "Usage: /decision Nama Project | keputusan | alasan")
+    """Preserve legacy pipe syntax; no-pipe syntax registers a Control Tower decision."""
+    if not await _require_authorized_user(update, context):
         return
-
-    def operation() -> str:
-        _memory(context).create_decision(fields[0], fields[1], fields[2] if len(fields) == 3 else None)
-        return f"Decision stored for {fields[0]}."
-
-    await _memory_reply(update, context, operation)
-
+    message = update.effective_message
+    if message is None:
+        return
+    raw = _argument_text(context)
+    if not raw:
+        await message.reply_text("Usage: /decision Project | decision | rationale OR /decision decision summary")
+        return
+    if "|" in raw:
+        fields = _pipe_fields(raw, 2, 3)
+        if fields is None:
+            await message.reply_text("Usage: /decision Project | decision | rationale")
+            return
+        try:
+            _memory(context).create_decision(fields[0], fields[1], fields[2] if len(fields) == 3 else None)
+        except MemoryError:
+            await message.reply_text("Decision could not be saved.")
+            return
+        await message.reply_text(f"Decision stored for {fields[0]}.")
+        return
+    service = _control_tower(context)
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    try:
+        decision = service.register_decision(raw, "Captured from Telegram", "Review required", "telegram user", "telegram")
+    except ControlTowerError:
+        await message.reply_text("Decision could not be recorded. Check the summary and try again.")
+        return
+    except Exception:
+        LOGGER.exception("Control Tower decision handler failed")
+        await message.reply_text("Decision could not be recorded right now.")
+        return
+    await message.reply_text(f"Control Tower decision recorded: {decision.decision_id[:8]}.")
 
 async def session_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     fields = _pipe_fields(_argument_text(context), 2, 4)
@@ -645,17 +674,153 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> No
     LOGGER.error("Unhandled Telegram bot error.")
 
 
+
+def _control_tower(context: ContextTypes.DEFAULT_TYPE) -> ControlTowerService | None:
+    service = context.application.bot_data.get("control_tower")
+    return service if isinstance(service, ControlTowerService) else None
+
+
+def _bounded_message(lines: list[str], limit: int = 3500) -> str:
+    result = "\n".join(lines)
+    return result if len(result) <= limit else result[: limit - 1].rstrip() + "…"
+
+
+async def _control_tower_error(message: object, action: str, error: Exception) -> None:
+    if isinstance(error, (ValidationError, InvalidCategoryError)):
+        text = f"{action}: check the supplied information and try again."
+    elif isinstance(error, ControlTowerError):
+        text = f"{action}: the request cannot be completed safely."
+    else:
+        LOGGER.exception("Unexpected Control Tower handler failure")
+        text = f"{action}: temporary problem. Please try again later."
+    await cast(object, message).reply_text(text)
+
+
+async def capture_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    raw = _argument_text(context)
+    fields = raw.split(maxsplit=1)
+    if len(fields) != 2:
+        await message.reply_text("Usage: /capture category title")
+        return
+    try:
+        item = service.capture_work(fields[0], fields[1], "telegram")
+    except Exception as error:
+        await _control_tower_error(message, "Capture failed", error)
+        return
+    await message.reply_text(f"Captured: {item.title} ({item.item_id[:8]}). Route: {item.recommended_route}.")
+
+
+async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    try:
+        items = service.get_today_priorities()
+    except Exception as error:
+        await _control_tower_error(message, "Today view failed", error)
+        return
+    lines = ["Today priorities:"] + ([f"• {item.title} — {item.status}" for item in items] or ["• No active priorities."])
+    await message.reply_text(_bounded_message(lines))
+
+
+async def approvals_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    try:
+        approvals = service.list_approvals()
+    except Exception as error:
+        await _control_tower_error(message, "Approval inbox failed", error)
+        return
+    lines = ["Approval inbox:"] + ([f"• {item.source_system}: {item.requested_action}" for item in approvals] or ["• No pending approvals."])
+    await message.reply_text(_bounded_message(lines))
+
+
+async def shutdown_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    try:
+        summary = service.evening_shutdown()
+    except Exception as error:
+        await _control_tower_error(message, "Shutdown summary failed", error)
+        return
+    lines = [
+        "Evening shutdown:", f"• Completed today: {len(summary.completed_today)}",
+        f"• In progress: {len(summary.in_progress)}", f"• Moved to tomorrow: {len(summary.moved_to_tomorrow)}",
+        f"• Awaiting approval: {len(summary.awaiting_approval)}", f"• Clarification needed: {len(summary.unresolved_clarification)}",
+        f"• Night Shift eligible: {summary.night_shift_eligibility.eligible_count}",
+    ]
+    lines.append("• No nighttime attention is required." if not summary.night_shift_required else "• Nighttime attention requires explicit approval.")
+    await message.reply_text(_bounded_message(lines))
+
+
+async def morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    try:
+        brief = service.morning_brief()
+    except Exception as error:
+        await _control_tower_error(message, "Morning brief failed", error)
+        return
+    lines = ["Morning brief:"]
+    lines.extend(f"• {item.title}" for item in brief.today_priorities)
+    lines.append(f"• Pending approvals: {len(brief.approval_queue)}")
+    lines.append(f"• Failed-safe items: {len(brief.failed_safe_items)}")
+    lines.append(f"• Decisions needed: {len(brief.decisions_needed)}")
+    if brief.latest_night_shift_brief is not None:
+        lines.append("• Latest Night Shift morning brief is available.")
+    await message.reply_text(_bounded_message(lines))
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
     execution: ExecutionService | None = None,
     provider: ProviderGatewayService | None = None,
+    night_shift: NightShiftService | None = None,
+    control_tower: ControlTowerService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
     application.bot_data["settings"] = settings
     application.bot_data["memory"] = memory
     application.bot_data["execution"] = execution
+    application.bot_data["night_shift"] = night_shift
+    application.bot_data["control_tower"] = control_tower
     application.bot_data["provider"] = provider
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -683,4 +848,10 @@ def build_application(
     application.add_handler(CommandHandler("providerstatus", providerstatus_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_error_handler(handle_error)
+
+    application.add_handler(CommandHandler("capture", capture_handler))
+    application.add_handler(CommandHandler("today", today_handler))
+    application.add_handler(CommandHandler("approvals", approvals_handler))
+    application.add_handler(CommandHandler("shutdown", shutdown_handler))
+    application.add_handler(CommandHandler("morning", morning_handler))
     return application
