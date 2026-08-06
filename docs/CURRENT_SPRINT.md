@@ -44,15 +44,37 @@ Key outcomes:
 
 ### Sprint 5A.1 — Night Shift Runtime Foundation
 
-Planned scope:
+Status: Implemented — see `docs/SPRINT_5A1.md` and `docs/night-shift-runtime.md`
 
-- night-shift schedule;
-- quiet hours;
-- safe overnight job queue;
-- notification severity levels;
-- persistent runtime mode;
-- morning brief foundation;
-- prepare, validate, and wait-for-approval policy.
+Delivered scope:
+
+- four persistent runtime modes (`active`, `night_shift`, `quiet`,
+  `maintenance`), restart-safe, with `quiet`/`maintenance` sticky against
+  the automatic scheduler;
+- timezone-aware night-shift schedule (default `Asia/Jakarta`), safe
+  midnight-crossing;
+- persistent, classified overnight job queue (`approved_overnight`,
+  `deferred_until_morning`, `critical_notify_only`, `prohibited`) as a hard
+  allowlist — unregistered job types are always rejected;
+- prepare → validate → save_draft → await_approval execution lifecycle for
+  approved-overnight work only; no real executor yet;
+- categorical, always-on prohibition of Git mutations, external messaging,
+  Calendar mutations, file deletion/move, document overwrite, secret
+  changes, purchases, and destructive migrations;
+- fail-closed notification severity routing (informational / attention-
+  required / critical) with one consolidated morning brief per day;
+- built strictly on top of the existing Sprint 5A `run_singleton.py` /
+  `scripts/service.sh` / `RotatingFileHandler` runtime — does not modify any
+  of them;
+- service interfaces reserved for Sprint 5B (Telegram commands:
+  `/nightshift`, `/nightstatus`, `/nightqueue`, `/wake` — future contracts
+  only, not implemented this sprint) and a future full-automation sprint
+  (`register_job_executor()` hook).
+
+Out of scope this sprint: any real overnight execution, Telegram commands,
+Google Drive/Calendar operations, email/WhatsApp, document rewriting,
+background token refresh, autonomous external communication, automatic Git
+mutations.
 
 ## Upcoming Wave 2
 

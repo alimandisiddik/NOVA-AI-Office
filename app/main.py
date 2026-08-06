@@ -10,6 +10,7 @@ from app.config import ConfigurationError, load_settings
 from app.dissertation.service import DissertationService
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.execution.service import ExecutionService
+from app.nightshift import NightShiftService
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
 from app.providers.ninerouter import NineRouterAdapter
 from app.providers.repository import ProviderRepository
@@ -80,6 +81,13 @@ def main() -> int:
         execution_svc.initialize()
     except MemoryDatabaseError:
         logger.error("Execution schema initialization failed.")
+        return 1
+
+    night_shift = NightShiftService(MemoryDatabase(settings.nova_memory_db_path))
+    try:
+        night_shift.initialize()
+    except MemoryDatabaseError:
+        logger.error("Night Shift Runtime schema initialization failed.")
         return 1
 
     provider_svc: ProviderGatewayService | None = None
