@@ -47,3 +47,13 @@ data/*.sqlite3
 *.db-journal
 *.db-shm
 *.db-wal
+# Google Workspace
+.credentials/
+*.json.token
+client_secret*.json
+credentials.json
+token.json
+*.token.json
+.nova-google-token-*
+google_client*.json
+google_token*.json
