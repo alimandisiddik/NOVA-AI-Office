@@ -14,11 +14,15 @@ class GoogleScope(enum.Enum):
     # Read-only calendar scopes
     CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly"
 
+    # Read-only Drive scopes
+    DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
+
 
 class ScopeBundle(enum.Enum):
     """Expose approved named scope bundles through a stable accessor."""
     DEFAULT = (GoogleScope.USERINFO_EMAIL.value, GoogleScope.USERINFO_PROFILE.value)
     CALENDAR = (*DEFAULT, GoogleScope.CALENDAR_READONLY.value)
+    DRIVE_READ = (*DEFAULT, GoogleScope.DRIVE_READONLY.value)
 
 
 def canonicalize_scopes(scopes: list[str] | tuple[str, ...]) -> tuple[str, ...]:
