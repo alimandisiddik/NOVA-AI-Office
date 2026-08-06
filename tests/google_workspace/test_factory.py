@@ -5,7 +5,8 @@ from __future__ import annotations
 import builtins
 from unittest.mock import ANY, MagicMock
 
-import pytest
+import unittest
+from unittest.mock import MagicMock, patch
 
 from app.google_workspace.auth import AuthError, GoogleDependencyError
 from app.google_workspace import factory
@@ -22,30 +23,31 @@ class DisconnectedAuthenticator:
         return None
 
 
-def test_missing_discovery_dependency_fails_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_import = builtins.__import__
-
-    def missing_discovery_import(name: str, *args: object, **kwargs: object) -> object:
-        if name.startswith("googleapiclient"):
-            raise ImportError("simulated missing dependency")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", missing_discovery_import)
-    with pytest.raises(GoogleDependencyError, match="Google API discovery dependency is unavailable"):
-        factory._load_discovery_builder()
-
-
-def test_factory_rejects_unapproved_service_and_disconnected_state() -> None:
-    disconnected = GoogleClientFactory(DisconnectedAuthenticator())  # type: ignore[arg-type]
-    with pytest.raises(GoogleDependencyError, match="not approved"):
-        disconnected.get_service("drive", "v3")
-    with pytest.raises(AuthError, match="reconnect required"):
-        disconnected.get_service("calendar", "v3")
+class TestFactory(unittest.TestCase):
+    @patch('builtins.__import__')
+    def test_missing_discovery_dependency_fails_clearly(self, mock_import) -> None:
+        real_import = __import__
+        def missing_discovery_import(name: str, *args: object, **kwargs: object) -> object:
+            if name.startswith("googleapiclient"):
+                raise ImportError("simulated missing dependency")
+            return real_import(name, *args, **kwargs)
+        mock_import.side_effect = missing_discovery_import
+        with self.assertRaisesRegex(GoogleDependencyError, "Google API discovery dependency is unavailable"):
+            factory._load_discovery_builder()
 
 
-def test_factory_uses_mocked_discovery_boundary_with_cache_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    build = MagicMock(return_value="mock-service")
-    monkeypatch.setattr(factory, "_load_discovery_builder", lambda: build)
-    service = GoogleClientFactory(ConnectedAuthenticator()).get_service("calendar", "v3")  # type: ignore[arg-type]
-    assert service == "mock-service"
-    build.assert_called_once_with("calendar", "v3", credentials=ANY, cache_discovery=False)
+    def test_factory_rejects_unapproved_service_and_disconnected_state(self) -> None:
+        disconnected = GoogleClientFactory(DisconnectedAuthenticator())  # type: ignore[arg-type]
+        with self.assertRaisesRegex(GoogleDependencyError, "not approved"):
+            disconnected.get_service("gmail", "v1")
+        with self.assertRaisesRegex(AuthError, "reconnect required"):
+            disconnected.get_service("calendar", "v3")
+
+
+    @patch('app.google_workspace.factory._load_discovery_builder')
+    def test_factory_uses_mocked_discovery_boundary_with_cache_disabled(self, mock_load) -> None:
+        build = MagicMock(return_value="mock-service")
+        mock_load.return_value = build
+        service = GoogleClientFactory(ConnectedAuthenticator()).get_service("calendar", "v3")  # type: ignore[arg-type]
+        self.assertEqual(service, "mock-service")
+        build.assert_called_once_with("calendar", "v3", credentials=ANY, cache_discovery=False)
