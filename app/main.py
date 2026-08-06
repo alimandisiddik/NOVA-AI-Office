@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+import os
 
 from app.config import ConfigurationError, load_settings
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
@@ -16,10 +18,32 @@ from app.telegram_bot import build_application
 
 def configure_logging() -> None:
     """Configure minimal local operational logging without sensitive payloads."""
+    from pathlib import Path
+
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+    repo_root = Path(__file__).resolve().parent.parent
+    data_dir = repo_root / "data"
+    data_dir.mkdir(exist_ok=True)
+    log_file = data_dir / "nova.log"
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+
+    # 5MB max bytes, 3 backups -> 20MB total max bounded log
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8"
+    )
+    handlers.append(file_handler)
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        format=log_format,
+        handlers=handlers
     )
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
 
