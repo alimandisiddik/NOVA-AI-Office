@@ -11,6 +11,7 @@ from app.dissertation.service import DissertationService
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.execution.service import ExecutionService
 from app.nightshift import NightShiftService
+from app.control_tower.service import ControlTowerService
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
 from app.providers.ninerouter import NineRouterAdapter
 from app.providers.repository import ProviderRepository
@@ -90,7 +91,20 @@ def main() -> int:
         logger.error("Night Shift Runtime schema initialization failed.")
         return 1
 
+
+    control_tower = ControlTowerService(
+        MemoryDatabase(settings.nova_memory_db_path),
+        execution=execution_svc,
+        night_shift=night_shift,
+    )
+    try:
+        control_tower.initialize()
+    except MemoryDatabaseError:
+        logger.error("Control Tower schema initialization failed.")
+        return 1
+
     provider_svc: ProviderGatewayService | None = None
+
     if settings.nova_provider_base_url and settings.nova_provider_api_key:
         adapter = NineRouterAdapter(settings.nova_provider_base_url, settings.nova_provider_api_key)
         provider_svc = ProviderGatewayService(
@@ -107,7 +121,7 @@ def main() -> int:
             logger.error("Provider Gateway initialization failed; continuing without it.")
             provider_svc = None
 
-    application = build_application(settings, memory, execution_svc, provider_svc)
+    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower)
     application.run_polling()
     return 0
 

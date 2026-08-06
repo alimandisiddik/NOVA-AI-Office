@@ -76,8 +76,8 @@ Google Drive/Calendar operations, email/WhatsApp, document rewriting,
 background token refresh, autonomous external communication, automatic Git
 mutations.
 
-## Upcoming Wave 2
+## Wave 2 — In Implementation Review
 
-- Sprint 5B — Telegram Agent Operations
+- Sprint 5B — Executive Control Tower MVP — implemented locally; cooperative review and merge pending
 - Sprint 5D — Google Calendar Integration
 - Sprint 5E — Google Drive Read-Only
