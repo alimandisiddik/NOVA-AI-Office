@@ -1,43 +1,61 @@
-# NOVA AI Office — Current Sprint
+# CURRENT SPRINT
 
-> **Always update this file at the start and end of every sprint.**
-> Keep one entry per sprint. Archive completed sprints to `docs/SPRINT_<n>.md`
-> when the next sprint begins.
+## Wave 1 — Completed
 
----
+### Sprint 5A — Always-On Runtime
 
-## Sprint 5A — Always-On Runtime
+Status: Completed and merged
 
-| Field | Value |
-|---|---|
-| **Status** | 🚧 In Progress — 2026-08-06 |
-| **Version target** | 5.0.0 |
-| **Owner** | NOVA AI Office |
+Key outcomes:
 
----
+- macOS launchd background service;
+- automatic startup and restart;
+- single-instance protection;
+- bounded logging;
+- service status and health commands.
 
-## Objective
+### Sprint 5C — Google Workspace Foundation
 
-Provide an always-on runtime for NOVA AI Office using macOS `launchd`, ensuring the bot runs automatically without requiring an active Terminal window, restarts on failure, and manages logs safely.
+Status: Completed and merged
 
-## Context — What Has Been Delivered
+Key outcomes:
 
-| Sprint | Key deliverables | Status |
-|---|---|---|
-| **1.1 - 3 corrective** | Repo foundation, SQLite Memory, Telegram, NL parser, Provider-agnostic router, Execution orchestration, Shared security pattern | ✅ Done |
-| **4A** | Read-only Provider Gateway via httpx, NineRouter adapter, circuit breaker | ✅ Done |
-| **4B** | Provider Fallback | ✅ Done |
-| **5A** | Always-On Runtime via macOS `launchd` | 🚧 In Progress |
+- secure Google OAuth desktop foundation;
+- deterministic least-privilege scope governance;
+- hardened local token storage;
+- credential validation and local disconnect;
+- approved Google client factory;
+- no Calendar or Drive business operations yet.
 
-## Remaining Debt
+### Sprint 6A.0 — Dissertation Workspace Foundation
 
-| Item | Priority | Notes |
-|---|---|---|
-| Async worker queue for real adapter dispatch | Medium | Needed before any real adapter is activated |
-| Full Telegram mock tests for execution handlers | Low | Covered by unit tests; integration tests deferred |
-| Real adapter implementation | Blocked | Requires security review before activation |
-| Per-execution artifact path enforcement | Low | `LocalDeterministicAdapter` writes no files; enforce on real adapters |
+Status: Completed and merging
 
----
+Key outcomes:
 
-*Update this file when sprint status, scope, or acceptance criteria change.*
+- dissertation project, chapter, and subchapter registry;
+- document-version metadata and lifecycle;
+- paragraph maps;
+- review jobs;
+- append-only revision logs;
+- metadata-only local storage.
+
+## Next Sprint
+
+### Sprint 5A.1 — Night Shift Runtime Foundation
+
+Planned scope:
+
+- night-shift schedule;
+- quiet hours;
+- safe overnight job queue;
+- notification severity levels;
+- persistent runtime mode;
+- morning brief foundation;
+- prepare, validate, and wait-for-approval policy.
+
+## Upcoming Wave 2
+
+- Sprint 5B — Telegram Agent Operations
+- Sprint 5D — Google Calendar Integration
+- Sprint 5E — Google Drive Read-Only
