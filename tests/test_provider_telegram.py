@@ -100,9 +100,13 @@ async def test_providerstatus_no_provider(mock_update, mock_context):
 async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     provider = MagicMock(spec=ProviderGatewayService)
     provider.base_url = "https://secret.com/api"
-    provider.circuit_breaker = type("MockCB", (), {"state": "closed"})()
-    provider.default_model = "model-1"
-    provider.allowed_models = ["model-1", "model-2"]
+    mock_cb = MagicMock()
+    mock_cb.get_state.return_value = "closed"
+    provider.circuit_breaker = mock_cb
+    provider.model_priority = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
+    provider.allowed_models = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
+    provider.last_successful_model = "nova-v1"
+    provider.last_fallback_reason = "timeout_error"
     mock_context.application.bot_data["provider"] = provider
 
     await providerstatus_command(mock_update, mock_context)
@@ -111,4 +115,7 @@ async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     assert "https://***" in response
     assert "secret.com" not in response
     assert "CLOSED" in response
-    assert "model-1, model-2" in response
+    assert "Most Recent Successful Model: nova-v1" in response
+    assert "Last Fallback Reason: timeout_error" in response
+    assert "nova-v1, nova-v2-preview, nova-v1-fallback" in response
+    assert "nova-v2-preview: disabled" in response

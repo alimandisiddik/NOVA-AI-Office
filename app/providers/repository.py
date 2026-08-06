@@ -4,10 +4,11 @@ from __future__ import annotations
 import sqlite3
 import hashlib
 from datetime import UTC, datetime
+from typing import Optional
 
 from app.memory.database import MemoryDatabase, MemoryDatabaseError
-from app.providers.schema import PROVIDER_SCHEMA
-from app.providers.models import ProviderAuditRecord
+from app.providers.schema import PROVIDER_SCHEMA, MIGRATIONS
+from app.providers.models import ProviderAuditRecord, ProviderRequestAttempt
 
 
 def _utc_now() -> str:
@@ -28,10 +29,18 @@ class ProviderRepository:
         try:
             with self._db.connection() as conn:
                 conn.executescript(PROVIDER_SCHEMA)
+                for migration in MIGRATIONS:
+                    try:
+                        conn.execute(migration)
+                    except sqlite3.OperationalError:
+                        # Ignore if column already exists
+                        pass
         except sqlite3.Error as exc:
             raise MemoryDatabaseError("Provider schema initialization failed") from exc
 
-    def log_request(self, record: ProviderAuditRecord) -> None:
+    def log_request(self, record: ProviderAuditRecord, attempts: list[ProviderRequestAttempt] = None) -> None:
+        if attempts is None:
+            attempts = []
         try:
             with self._db.connection() as conn:
                 conn.execute(
@@ -39,8 +48,9 @@ class ProviderRepository:
                     INSERT INTO provider_request_audit
                     (request_id, execution_id, user_id, provider_id, model_id,
                      workflow_id, role_id, status, prompt_hash, response_size,
-                     latency_ms, retry_count, error_category, created_at, completed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     latency_ms, retry_count, error_category, created_at, completed_at,
+                     initial_model_id, final_model_id, attempt_count, fallback_used, fallback_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.request_id,
@@ -58,10 +68,36 @@ class ProviderRepository:
                         record.error_category,
                         record.created_at,
                         record.completed_at,
+                        record.initial_model_id,
+                        record.final_model_id,
+                        record.attempt_count,
+                        record.fallback_used,
+                        record.fallback_reason,
                     )
                 )
+
+                for attempt in attempts:
+                    conn.execute(
+                        """
+                        INSERT INTO provider_request_attempts
+                        (request_id, attempt_number, model_id, latency_ms, error_category, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            record.request_id,
+                            attempt.attempt_number,
+                            attempt.model_id,
+                            attempt.latency_ms,
+                            attempt.error_category,
+                            attempt.status,
+                            attempt.created_at
+                        )
+                    )
         except sqlite3.IntegrityError as exc:
-            # duplicate request ID rejection
-            raise MemoryDatabaseError("Duplicate request_id rejected") from exc
+            if "provider_request_attempts.request_id, provider_request_attempts.attempt_number" in str(exc):
+                raise MemoryDatabaseError("Duplicate attempt rejected") from exc
+            if "provider_request_audit.request_id" in str(exc):
+                raise MemoryDatabaseError("Duplicate request_id rejected") from exc
+            raise MemoryDatabaseError("Provider audit integrity error") from exc
         except sqlite3.Error as exc:
             raise MemoryDatabaseError("Failed to log provider request") from exc

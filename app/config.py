@@ -24,6 +24,7 @@ class Settings:
     nova_memory_db_path: Path
     nova_provider_base_url: str = ""
     nova_provider_api_key: str = ""
+    nova_provider_model_priority: list[str] = None
     nova_provider_default_model: str = ""
     nova_provider_allowed_models: list[str] = None
 
@@ -68,8 +69,10 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     provider_key = environment.get("NOVA_PROVIDER_API_KEY", "").strip()
     provider_default = environment.get("NOVA_PROVIDER_DEFAULT_MODEL", "").strip()
     provider_allowed = environment.get("NOVA_PROVIDER_ALLOWED_MODELS", "").strip()
+    provider_priority = environment.get("NOVA_PROVIDER_MODEL_PRIORITY", "").strip()
 
     allowed_list = [m.strip() for m in provider_allowed.split(",") if m.strip()] if provider_allowed else []
+    priority_list = [m.strip() for m in provider_priority.split(",") if m.strip()] if provider_priority else []
 
     return Settings(
         telegram_bot_token=token,
@@ -78,6 +81,7 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         nova_memory_db_path=(Path(memory_path) if Path(memory_path).is_absolute() else _repository_env_file().parent / memory_path),
         nova_provider_base_url=provider_base,
         nova_provider_api_key=provider_key,
+        nova_provider_model_priority=priority_list if priority_list else ([],) [0],
         nova_provider_default_model=provider_default,
         nova_provider_allowed_models=allowed_list if allowed_list else ([],) [0],
     )

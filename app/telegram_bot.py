@@ -54,6 +54,7 @@ from app.execution.repository import (
     InvalidTransitionError,
 )
 from app.providers.service import ProviderGatewayService
+from app.providers.registry import get_registered_model
 from app.providers.errors import ProviderError
 from app.execution.formatters import (
     execution_approved_message,
@@ -616,14 +617,25 @@ async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_T
     parsed = urlparse(provider.base_url)
     safe_url = f"{parsed.scheme}://***" if parsed.scheme else "***"
 
-    cb_state = provider.circuit_breaker.state.upper()
+    model_lines = []
+    for model_id in provider.model_priority:
+        model = get_registered_model(model_id)
+        enabled = "enabled" if model and model.enabled else "disabled"
+        circuit_state = provider.circuit_breaker.get_state(model_id).upper()
+        model_lines.append(f"  - {model_id}: {enabled}; circuit={circuit_state}")
+
+    recent_success = provider.last_successful_model or "none"
+    fallback_reason = provider.last_fallback_reason or "none"
     lines = [
         "🌐 Provider Gateway Status",
         "",
         f"URL: {safe_url}",
-        f"Circuit Breaker: {cb_state}",
-        f"Default Model: {provider.default_model}",
-        f"Allowed Models: {', '.join(provider.allowed_models)}",
+        f"Model Priority: {', '.join(provider.model_priority)}",
+        "Models:",
+    ] + model_lines + [
+        "",
+        f"Most Recent Successful Model: {recent_success}",
+        f"Last Fallback Reason: {fallback_reason}",
     ]
     await effective_message.reply_text("\n".join(lines))
 

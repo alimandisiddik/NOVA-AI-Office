@@ -1,79 +1,90 @@
-"""Provider gateway service orchestrating safe provider calls."""
+"""Secure provider gateway with deterministic, bounded model fallback."""
 
 from __future__ import annotations
-import uuid
-import time
+
 import logging
-from dataclasses import dataclass
-from typing import Optional, Any
+import time
+import uuid
+from typing import Optional
 from urllib.parse import urlparse
 
-from app.providers.models import ProviderRequest, ProviderResponse, ProviderAuditRecord
 from app.providers.adapter import ProviderAdapter
-from app.providers.repository import ProviderRepository, hash_text, _utc_now
 from app.providers.errors import (
-    AuthenticationError,
     AuthorizationError,
     CircuitOpenError,
     ConfigurationError,
     ConnectionError,
-    InvalidResponseError,
     OutputLimitError,
     ProviderError,
     RateLimitError,
     SensitiveContentError,
     TimeoutError,
-    UnsupportedOperationError,
 )
-from app.router.classifier import classify_intent
-from app.router.risk import assess_risk
+from app.providers.models import (
+    ProviderAuditRecord,
+    ProviderRequest,
+    ProviderRequestAttempt,
+    ProviderResponse,
+)
+from app.providers.registry import get_registered_model
+from app.providers.repository import ProviderRepository, _utc_now, hash_text
+from app.providers.selection import select_eligible_models
 from app.router.planner import generate_plan
 from app.security import SENSITIVE_CONTENT_PATTERN
 
-
 LOGGER = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
-OUTPUT_BYTE_LIMIT = 65_536  # Same as execution service limit
+MAX_TOTAL_ATTEMPTS = 3
+OUTPUT_BYTE_LIMIT = 65_536
 DEFAULT_TIMEOUT_SECONDS = 30.0
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
 CIRCUIT_BREAKER_RESET_TIMEOUT = 60.0
 
 
 class CircuitBreaker:
-    """In-memory circuit breaker for Sprint 4A."""
+    """In-memory circuit breakers isolated by ``model_id``."""
 
     def __init__(self) -> None:
-        self.state = "closed"
-        self.failures = 0
-        self.last_failure_time = 0.0
+        self._states: dict[str, str] = {}
+        self._failures: dict[str, int] = {}
+        self._last_failure_times: dict[str, float] = {}
 
-    def record_failure(self) -> None:
-        self.failures += 1
-        self.last_failure_time = time.monotonic()
-        if self.state == "closed" and self.failures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
-            self.state = "open"
-            LOGGER.warning("Circuit breaker transitioning to OPEN state.")
+    def _ensure(self, model_id: str) -> None:
+        self._states.setdefault(model_id, "closed")
+        self._failures.setdefault(model_id, 0)
+        self._last_failure_times.setdefault(model_id, 0.0)
 
-    def record_success(self) -> None:
-        if self.state == "half_open":
-            self.state = "closed"
-            self.failures = 0
-            LOGGER.info("Circuit breaker transitioning to CLOSED state.")
-        elif self.state == "closed":
-            self.failures = 0
+    def get_state(self, model_id: str) -> str:
+        self._ensure(model_id)
+        return self._states[model_id]
 
-    def check_request_allowed(self) -> None:
-        if self.state == "open":
-            if time.monotonic() - self.last_failure_time > CIRCUIT_BREAKER_RESET_TIMEOUT:
-                self.state = "half_open"
-                LOGGER.info("Circuit breaker transitioning to HALF_OPEN state.")
-            else:
-                raise CircuitOpenError("Circuit breaker is open. Requests blocked.")
+    def is_open(self, model_id: str) -> bool:
+        return self.get_state(model_id) == "open"
+
+    def check_request_allowed(self, model_id: str) -> None:
+        self._ensure(model_id)
+        if self._states[model_id] != "open":
+            return
+        if time.monotonic() - self._last_failure_times[model_id] > CIRCUIT_BREAKER_RESET_TIMEOUT:
+            self._states[model_id] = "half_open"
+            return
+        raise CircuitOpenError("Requested model circuit is open.")
+
+    def record_success(self, model_id: str) -> None:
+        self._ensure(model_id)
+        self._states[model_id] = "closed"
+        self._failures[model_id] = 0
+
+    def record_failure(self, model_id: str) -> None:
+        self._ensure(model_id)
+        self._failures[model_id] += 1
+        self._last_failure_times[model_id] = time.monotonic()
+        if self._failures[model_id] >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+            self._states[model_id] = "open"
 
 
 class ProviderGatewayService:
-    """Orchestrates provider calls with strict security, retry, and auditing."""
+    """Execute safe read-only generation with at most one attempt per model."""
 
     def __init__(
         self,
@@ -81,204 +92,252 @@ class ProviderGatewayService:
         adapter: ProviderAdapter,
         base_url: str,
         api_key: str,
-        default_model: str,
+        model_priority: list[str],
         allowed_models: list[str],
     ) -> None:
         self._repo = repository
         self._adapter = adapter
         self.base_url = base_url
         self.api_key = api_key
-        self.default_model = default_model
-        self.allowed_models = allowed_models
-
+        self.model_priority = list(model_priority)
+        self.allowed_models = list(allowed_models)
         self.circuit_breaker = CircuitBreaker()
+        self.last_successful_model: str | None = None
+        self.last_fallback_reason: str | None = None
         self._validate_config()
 
     def _validate_config(self) -> None:
         if not self.base_url or not self.api_key:
             raise ConfigurationError("NOVA_PROVIDER_BASE_URL and NOVA_PROVIDER_API_KEY must be set.")
-        if not self.base_url.startswith("https://") and not self.base_url.startswith("http://localhost"):
+        parsed = urlparse(self.base_url)
+        if not parsed.hostname or (parsed.scheme != "https" and parsed.hostname != "localhost"):
             raise ConfigurationError("Provider base URL must use HTTPS (except localhost testing).")
-        if not self.default_model or self.default_model not in self.allowed_models:
-            raise ConfigurationError(f"Default model '{self.default_model}' is not in allowed models.")
-        try:
-            parsed = urlparse(self.base_url)
-            if not parsed.hostname:
-                raise ConfigurationError("Invalid provider URL.")
-        except Exception as exc:
-            raise ConfigurationError("Could not parse provider URL.") from exc
+        if not self.model_priority:
+            raise ConfigurationError("NOVA_PROVIDER_MODEL_PRIORITY is empty or invalid.")
+        if len(set(self.model_priority)) != len(self.model_priority):
+            raise ConfigurationError("NOVA_PROVIDER_MODEL_PRIORITY contains duplicate model IDs.")
+        if len(self.model_priority) > MAX_TOTAL_ATTEMPTS:
+            raise ConfigurationError(
+                f"NOVA_PROVIDER_MODEL_PRIORITY exceeds maximum attempts ({MAX_TOTAL_ATTEMPTS})."
+            )
+        for model_id in self.model_priority:
+            if model_id not in self.allowed_models:
+                raise ConfigurationError(f"Priority model '{model_id}' is not in allowed models.")
+            if get_registered_model(model_id) is None:
+                raise ConfigurationError(f"Priority model '{model_id}' is not registered.")
 
     def initialize(self) -> None:
-        """Initialize the additive provider audit schema."""
         self._repo.initialize()
 
     async def generate_text(self, prompt: str, user_id: int) -> str:
-        """Main entry point for text generation. Generates a correlation ID and handles logic."""
+        """Generate text with deterministic, same-group, structured fallback."""
         request_id = str(uuid.uuid4())
+        started_at = time.monotonic()
 
-        # 1. Reject sensitive content
         if SENSITIVE_CONTENT_PATTERN.search(prompt):
-            self._log_failure(
-                request_id, user_id, prompt, "sensitive_content_error", 0, 0, "GENERAL", "UNKNOWN", "UNKNOWN"
+            self._audit(
+                request_id, user_id, prompt, "GENERAL", "UNKNOWN", "failed",
+                "sensitive_content_error", None, None, [], 0, None,
             )
             raise SensitiveContentError("Request rejected: sensitive content detected.")
 
-        # 2. Reject destructive/high-risk requests via router
         plan = generate_plan(prompt)
         workflow_id = plan.workflow.workflow_id
-
-        # Resolve role based on workflow. If general, use CONTROL_TOWER.
         role_id = plan.primary_roles[0].role_id if plan.primary_roles else "UNKNOWN"
-
         if plan.risk.risk_level == "HIGH":
-            self._log_failure(
-                request_id, user_id, prompt, "authorization_error", 0, 0, workflow_id, role_id, "UNKNOWN"
+            self._audit(
+                request_id, user_id, prompt, workflow_id, role_id, "failed",
+                "authorization_error", None, None, [], 0, None,
             )
             raise AuthorizationError("Request rejected: destructive or high-risk prompts are not permitted via gateway.")
 
-        # 3. Model selection (deterministic based on config for now, can be role-based later)
-        model_id = self.default_model
-        if model_id not in self.allowed_models:
-            model_id = self.allowed_models[0]
-
-        # 4. Check circuit breaker
-        self.circuit_breaker.check_request_allowed()
-
-        # Build request
-        req = ProviderRequest(
-            request_id=request_id,
-            user_id=user_id,
-            provider_id="9Router",
-            model_id=model_id,
-            workflow_id=workflow_id,
-            role_id=role_id,
-            prompt=prompt,
-            execution_id=None,
+        eligible_models = select_eligible_models(
+            workflow_id,
+            role_id,
+            self.model_priority,
+            self.allowed_models,
+            self.circuit_breaker.is_open,
         )
-
-        # 5. Execute with bounded retries
-        retries = 0
-        start_time = time.monotonic()
-        response: Optional[ProviderResponse] = None
-        error_cat: Optional[str] = None
-
-        while retries <= MAX_RETRIES:
-            try:
-                response = await self._adapter.generate_text(req, timeout_seconds=DEFAULT_TIMEOUT_SECONDS)
-                self.circuit_breaker.record_success()
-                break
-            except (ConnectionError, TimeoutError, RateLimitError) as exc:
-                # These are retryable
-                self.circuit_breaker.record_failure()
-                error_cat = exc.category
-                if retries < MAX_RETRIES:
-                    retries += 1
-                    # Exponential backoff would go here, but for Sprint 4A a tiny async sleep is ok,
-                    # or just immediately retry.
-                    continue
-                else:
-                    self._log_failure(
-                        request_id, user_id, prompt, error_cat,
-                        int((time.monotonic() - start_time) * 1000), retries,
-                        workflow_id, role_id, model_id
-                    )
-                    raise
-            except ProviderError as exc:
-                # E.g., 500 ProviderError is retryable. But AuthenticationError is not.
-                self.circuit_breaker.record_failure()
-                error_cat = exc.category
-                # Do not retry 400, 401, 403, invalid model, unsupported, invalid json
-                if exc.category in (
-                    "authentication_error", "authorization_error",
-                    "invalid_response", "unsupported_operation",
-                    "sensitive_content_error"
-                ):
-                    self._log_failure(
-                        request_id, user_id, prompt, error_cat,
-                        int((time.monotonic() - start_time) * 1000), retries,
-                        workflow_id, role_id, model_id
-                    )
-                    raise
-
-                # Assume other provider_error (5xx) is retryable
-                if retries < MAX_RETRIES:
-                    retries += 1
-                    continue
-                else:
-                    self._log_failure(
-                        request_id, user_id, prompt, error_cat,
-                        int((time.monotonic() - start_time) * 1000), retries,
-                        workflow_id, role_id, model_id
-                    )
-                    raise
-            except Exception as exc:
-                # Unknown error
-                self.circuit_breaker.record_failure()
-                self._log_failure(
-                    request_id, user_id, prompt, "provider_error",
-                    int((time.monotonic() - start_time) * 1000), retries,
-                    workflow_id, role_id, model_id
-                )
-                raise ProviderError(f"Unexpected error: {exc}") from exc
-
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-
-        if not response:
-            raise ProviderError("Failed to generate text.")
-
-        response_bytes = len(response.content.encode("utf-8"))
-        if response_bytes > OUTPUT_BYTE_LIMIT:
-            self._log_failure(
-                request_id, user_id, prompt, "output_limit_error",
-                latency_ms, retries, workflow_id, role_id, model_id, response_size=response_bytes
+        if not eligible_models:
+            self._audit(
+                request_id, user_id, prompt, workflow_id, role_id, "failed",
+                "configuration_error", None, None, [], 0, None,
             )
-            raise OutputLimitError(f"Response size ({response_bytes} bytes) exceeds limit ({OUTPUT_BYTE_LIMIT} bytes).")
+            raise ConfigurationError("No eligible model supports this workflow and role.")
 
-        # Log success
-        audit = ProviderAuditRecord(
-            request_id=request_id,
-            execution_id=None,
-            user_id=user_id,
-            provider_id="9Router",
-            model_id=model_id,
-            workflow_id=workflow_id,
-            role_id=role_id,
-            status="success",
-            prompt_hash=hash_text(prompt),
-            response_size=response_bytes,
-            latency_ms=latency_ms,
-            retry_count=retries,
-            error_category=None,
-            created_at=_utc_now(),
-            completed_at=_utc_now(),
-        )
-        self._repo.log_request(audit)
+        initial_model_id = eligible_models[0]
+        attempts: list[ProviderRequestAttempt] = []
+        attempted_model_ids: set[str] = set()
+        last_error: ProviderError | None = None
+        fallback_reason: str | None = None
+        response: ProviderResponse | None = None
+        final_model_id: str | None = None
 
-        return response.content
+        for attempt_number, model_id in enumerate(eligible_models, start=1):
+            if attempt_number > MAX_TOTAL_ATTEMPTS or model_id in attempted_model_ids:
+                break
+            attempted_model_ids.add(model_id)
 
-    def _log_failure(
-        self, request_id: str, user_id: int, prompt: str, error_category: str,
-        latency_ms: int, retry_count: int, workflow_id: str, role_id: str,
-        model_id: str, response_size: int = 0
-    ) -> None:
-        try:
-            audit = ProviderAuditRecord(
+            try:
+                self.circuit_breaker.check_request_allowed(model_id)
+            except CircuitOpenError as error:
+                last_error = error
+                fallback_reason = fallback_reason or error.category
+                continue
+
+            model_started_at = time.monotonic()
+            request = ProviderRequest(
                 request_id=request_id,
-                execution_id=None,
                 user_id=user_id,
                 provider_id="9Router",
                 model_id=model_id,
                 workflow_id=workflow_id,
                 role_id=role_id,
-                status="failed",
-                prompt_hash=hash_text(prompt),
-                response_size=response_size,
-                latency_ms=latency_ms,
-                retry_count=retry_count,
-                error_category=error_category,
-                created_at=_utc_now(),
-                completed_at=_utc_now(),
+                prompt=prompt,
             )
-            self._repo.log_request(audit)
-        except Exception as exc:
-            LOGGER.error("Failed to write failure audit log: %s", exc)
+            try:
+                response = await self._adapter.generate_text(request, timeout_seconds=DEFAULT_TIMEOUT_SECONDS)
+            except (ConnectionError, TimeoutError, RateLimitError) as error:
+                self.circuit_breaker.record_failure(model_id)
+                last_error = error
+                fallback_reason = fallback_reason or error.category
+                attempts.append(
+                    ProviderRequestAttempt(
+                        attempt_number=len(attempts) + 1,
+                        model_id=model_id,
+                        latency_ms=int((time.monotonic() - model_started_at) * 1000),
+                        error_category=error.category,
+                        status="failed",
+                        created_at=_utc_now(),
+                    )
+                )
+                continue
+            except ProviderError as error:
+                self.circuit_breaker.record_failure(model_id)
+                last_error = error
+                attempts.append(
+                    ProviderRequestAttempt(
+                        attempt_number=len(attempts) + 1,
+                        model_id=model_id,
+                        latency_ms=int((time.monotonic() - model_started_at) * 1000),
+                        error_category=error.category,
+                        status="failed",
+                        created_at=_utc_now(),
+                    )
+                )
+                # Generic provider errors (including unlisted 5xx) stop immediately.
+                break
+
+            self.circuit_breaker.record_success(model_id)
+            final_model_id = model_id
+            attempts.append(
+                ProviderRequestAttempt(
+                    attempt_number=len(attempts) + 1,
+                    model_id=model_id,
+                    latency_ms=int((time.monotonic() - model_started_at) * 1000),
+                    error_category=None,
+                    status="success",
+                    created_at=_utc_now(),
+                )
+            )
+            break
+
+        if response is None:
+            self.last_fallback_reason = fallback_reason
+            self._audit(
+                request_id,
+                user_id,
+                prompt,
+                workflow_id,
+                role_id,
+                "failed",
+                last_error.category if last_error else "provider_error",
+                initial_model_id,
+                None,
+                attempts,
+                0,
+                fallback_reason,
+            )
+            if last_error is not None:
+                raise last_error
+            raise ProviderError("No provider model attempt completed.")
+
+        response_size = len(response.content.encode("utf-8"))
+        if response_size > OUTPUT_BYTE_LIMIT:
+            self._audit(
+                request_id,
+                user_id,
+                prompt,
+                workflow_id,
+                role_id,
+                "failed",
+                "output_limit_error",
+                initial_model_id,
+                final_model_id,
+                attempts,
+                response_size,
+                fallback_reason,
+            )
+            raise OutputLimitError("Provider response exceeded the configured output limit.")
+
+        self.last_successful_model = final_model_id
+        self.last_fallback_reason = fallback_reason
+        self._audit(
+            request_id,
+            user_id,
+            prompt,
+            workflow_id,
+            role_id,
+            "success",
+            None,
+            initial_model_id,
+            final_model_id,
+            attempts,
+            response_size,
+            fallback_reason,
+        )
+        return response.content
+
+    def _audit(
+        self,
+        request_id: str,
+        user_id: int,
+        prompt: str,
+        workflow_id: str,
+        role_id: str,
+        status: str,
+        error_category: str | None,
+        initial_model_id: str | None,
+        final_model_id: str | None,
+        attempts: list[ProviderRequestAttempt],
+        response_size: int,
+        fallback_reason: str | None,
+    ) -> None:
+        try:
+            self._repo.log_request(
+                ProviderAuditRecord(
+                    request_id=request_id,
+                    execution_id=None,
+                    user_id=user_id,
+                    provider_id="9Router",
+                    model_id=final_model_id or initial_model_id or "UNKNOWN",
+                    workflow_id=workflow_id,
+                    role_id=role_id,
+                    status=status,
+                    prompt_hash=hash_text(prompt),
+                    response_size=response_size,
+                    latency_ms=0,
+                    retry_count=0,
+                    error_category=error_category,
+                    created_at=_utc_now(),
+                    completed_at=_utc_now(),
+                    initial_model_id=initial_model_id,
+                    final_model_id=final_model_id,
+                    attempt_count=len(attempts),
+                    fallback_used=int(len(attempts) > 1),
+                    fallback_reason=fallback_reason,
+                ),
+                attempts,
+            )
+        except Exception:
+            LOGGER.exception("Provider audit write failed.")

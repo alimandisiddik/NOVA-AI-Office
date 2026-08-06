@@ -6,12 +6,12 @@
 
 ---
 
-## Sprint 4A — Secure Provider Gateway
+## Sprint 4B — Deterministic Provider Model Fallback
 
 | Field | Value |
 |---|---|
 | **Status** | ✅ Complete — 2026-08-06 (corrective pass applied) |
-| **Version target** | 4.0.0 |
+| **Version target** | 4.1.0 |
 | **Owner** | NOVA AI Office |
 
 ---
@@ -49,6 +49,20 @@ for both the router commands (`/route`, `/plan`) and the execution service
 | **3** | Execution orchestration (`app/execution/`): schema, repository, service, adapter, formatters; 85 new tests | ✅ Done |
 | **3 corrective** | Strengthened risk patterns, shared `SENSITIVE_CONTENT_PATTERN`, service-layer limit enforcement, per-execution reconcile audit, auth-before-usage in route/plan handlers, Indonesian wording | ✅ Done |
 | **4A** | Read-only Provider Gateway via `httpx`, NineRouter adapter, `/ask` & `/providerstatus`, audit schema, circuit breaker, retry bounds | ✅ Done |
+| **4B** | Registry-backed model selection, same-group sequential fallback, per-model circuits, maximum three attempts, and additive attempt auditing | ✅ Done |
+
+### Sprint 4B — Provider Fallback Status
+
+Sprint 4B is complete. `NOVA_PROVIDER_MODEL_PRIORITY` is authoritative for
+deterministic selection. Each eligible model is attempted once, with a maximum
+of three total attempts. Fallback is limited to structured timeout, connection,
+and rate-limit errors (including adapter-mapped HTTP 502/503/504); generic
+provider errors stop immediately.
+
+The registry filters disabled, unsupported, disallowed, and circuit-open models
+and keeps automatic fallback within the initial model’s fallback group. Audit
+metadata now records initial/final model IDs, attempt count, fallback use and
+reason, plus one row per outbound model attempt.
 
 ---
 
@@ -148,7 +162,7 @@ protected commands.
 |---|---|---|
 | `tests/test_router_risk.py` | extended | Includes all destructive patterns + false-positive guards |
 | `tests/test_execution_service.py` | extended | Includes service-layer limit enforcement + reconcile audit |
-| All other tests | passing | 236 total tests green |
+| All other tests | passing | 271 total tests green |
 
 ---
 

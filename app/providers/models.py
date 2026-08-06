@@ -28,6 +28,16 @@ class ProviderResponse:
 
 
 @dataclass(frozen=True)
+class ProviderRequestAttempt:
+    attempt_number: int
+    model_id: str
+    latency_ms: int
+    error_category: Optional[str]
+    status: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class ProviderAuditRecord:
     request_id: str
     execution_id: Optional[int]
@@ -44,3 +54,8 @@ class ProviderAuditRecord:
     error_category: Optional[str]
     created_at: str
     completed_at: str
+    initial_model_id: Optional[str] = None
+    final_model_id: Optional[str] = None
+    attempt_count: int = 1
+    fallback_used: int = 0
+    fallback_reason: Optional[str] = None

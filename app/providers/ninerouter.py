@@ -70,7 +70,7 @@ class NineRouterAdapter:
             raise ConnectionError(f"Network error connecting to NineRouter: {type(exc).__name__}") from exc
 
         # Handle specific HTTP status codes
-        if response.status_code == 301 or response.status_code == 302 or response.status_code == 307 or response.status_code == 308:
+        if response.status_code in (301, 302, 307, 308):
             raise ConnectionError(f"Redirects are not permitted (HTTP {response.status_code}).")
 
         if response.status_code == 401:
@@ -82,6 +82,11 @@ class NineRouterAdapter:
         if response.status_code in (400, 404, 422):
             # Sanitize error body, don't expose raw
             raise UnsupportedOperationError(f"Request not supported or invalid (HTTP {response.status_code}).")
+
+        if response.status_code in (502, 503, 504):
+            # Safe to fallback
+            raise ConnectionError(f"NineRouter temporary server error (HTTP {response.status_code}).")
+
         if response.status_code >= 500:
             raise ProviderError(f"NineRouter server error (HTTP {response.status_code}).", category="provider_error")
 
