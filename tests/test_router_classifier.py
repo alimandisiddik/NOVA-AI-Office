@@ -98,3 +98,98 @@ def test_matched_rule_is_non_empty_string() -> None:
     result = classify_intent("debug the code")
     assert isinstance(result.matched_rule, str)
     assert len(result.matched_rule) > 0
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5G.2 — informational vs. execution intent regression cases
+#
+# Root cause: "fungsi" (and other technical domain nouns) was a first-match
+# TECHNICAL trigger regardless of intent, so a purely explanatory question
+# containing a technical noun was misrouted into the TECHNICAL workflow.
+# These cases lock in the fix: explicit technical ACTION verbs still route
+# to TECHNICAL unconditionally; technical/strategy DOMAIN nouns only route
+# to their workflow when the sentence is not itself an explanatory/
+# informational question about that noun. See docs/SPRINT_5G2.md.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message,expected_workflow",
+    [
+        # --- Required acceptance cases (docs/SPRINT_5G2.md) -----------------
+        # 1. The confirmed runtime defect reproduction.
+        (
+            "Jelaskan dalam 3 kalimat apa fungsi Executive Control Tower di NOVA.",
+            "GENERAL",
+        ),
+        # 2. Informational technical noun ("fungsi") + explanatory verb.
+        ("Jelaskan fungsi database.", "GENERAL"),
+        # 3. Informational technical noun via Indonesian question pattern.
+        ("Apa fungsi NOVA Router?", "GENERAL"),
+        # 4. Explicit technical action verb ("perbaiki") must win.
+        ("Perbaiki fungsi database connection ini.", "TECHNICAL"),
+        # 5. Explicit technical action verb ("debug") must win.
+        ("Debug fungsi generate_text.", "TECHNICAL"),
+        # 6. Domain noun alone, no explanatory phrasing → TECHNICAL preserved.
+        ("Review architecture NOVA.", "TECHNICAL"),
+        # 7. Explicit action verb ("implement") must win regardless of nouns.
+        ("Implement provider adapter baru.", "TECHNICAL"),
+        # 8. Explicit action verb ("refactor") must win.
+        ("Refactor class provider gateway.", "TECHNICAL"),
+        # 9. Strategy noun, no explanatory phrasing → STRATEGY preserved.
+        ("Buat strategi NOVA 2027.", "STRATEGY"),
+        # 10. Strategy noun + explanatory phrasing → GENERAL (documented
+        #     deterministic policy: same guard as the technical-domain fix).
+        ("Jelaskan strategi NOVA 2027.", "GENERAL"),
+        # 11. Concrete Google Workspace operation must not be affected.
+        ("Cari dokumen di Google Drive.", "GOOGLE_WORKSPACE"),
+        # 12. Concrete presentation asset must not be affected.
+        ("Buat slide executive summary.", "PRESENTATION"),
+        # 13. "review" must not hijack academic routing.
+        ("Review literatur untuk disertasi.", "ACADEMIC"),
+        # 14. Frozen single-word precedence: FAST wins before TECHNICAL.
+        ("debug", "FAST"),
+        # --- Additional English-phrasing regression coverage ----------------
+        ("Explain what the database module does.", "GENERAL"),
+        ("What is an API?", "GENERAL"),
+        ("What does the endpoint schema do?", "GENERAL"),
+        ("Describe the server architecture.", "GENERAL"),
+        # --- Guard: informational GWS/Presentation/Academic remain intact ---
+        ("Jelaskan cara mengirim email lewat Gmail", "GOOGLE_WORKSPACE"),
+        ("Jelaskan slide ini", "PRESENTATION"),
+        ("Jelaskan metodologi penelitian", "ACADEMIC"),
+    ],
+)
+def test_classify_intent_intent_vs_domain_regression(
+    message: str, expected_workflow: str
+) -> None:
+    result = classify_intent(message)
+    assert result.workflow_id == expected_workflow, (
+        f"'{message}' → expected {expected_workflow}, got {result.workflow_id} "
+        f"(rule: {result.matched_rule})"
+    )
+
+
+def test_technical_action_verb_overrides_explanatory_phrasing() -> None:
+    """An explicit action verb wins even inside an explanatory sentence."""
+    result = classify_intent("Jelaskan cara debug fungsi generate_text.")
+    assert result.workflow_id == "TECHNICAL"
+    assert result.matched_rule.startswith("technical_action:")
+
+
+def test_informational_technical_domain_has_medium_confidence() -> None:
+    """Suppressed weak domain matches still carry a traceable MEDIUM
+    confidence, distinct from the plain LOW-confidence default fallback."""
+    result = classify_intent("Jelaskan fungsi database.")
+    assert result.workflow_id == "GENERAL"
+    assert result.confidence == "MEDIUM"
+    assert result.matched_rule.startswith("informational_override:")
+
+
+def test_plain_fallback_still_has_low_confidence() -> None:
+    """Messages with no technical/strategy signal at all are unaffected —
+    they keep the original LOW-confidence default fallback."""
+    result = classify_intent("Hello NOVA, how are you today?")
+    assert result.workflow_id == "GENERAL"
+    assert result.confidence == "LOW"
+    assert result.matched_rule == "default_fallback"

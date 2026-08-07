@@ -10,7 +10,7 @@ from app.router.planner import (
     generate_plan,
 )
 from app.router.roles import list_roles
-from app.router.workflows import list_workflows
+from app.router.workflows import get_workflow, list_workflows
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +136,50 @@ def test_format_router_status_contains_all_workflow_ids() -> None:
 def test_format_router_status_mentions_not_connected() -> None:
     text = format_router_status(list_roles(), list_workflows())
     assert "NOT_CONNECTED" in text
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5G.2 — informational intent must plan into GENERAL, not TECHNICAL
+#
+# This is the exact confirmed runtime defect reproduction: the Telegram
+# request routed into TECHNICAL → the review provider chain → HTTP 429,
+# even though it is a purely informational question. Verified against the
+# real workflow/role registry rather than hard-coded role IDs, so this test
+# stays correct if the registry's support roles ever change.
+# ---------------------------------------------------------------------------
+
+
+def test_generate_plan_informational_technical_question_routes_to_general() -> None:
+    plan = generate_plan(
+        "Jelaskan dalam 3 kalimat apa fungsi Executive Control Tower di NOVA."
+    )
+    expected_workflow = get_workflow("GENERAL")
+    assert plan.workflow.workflow_id == "GENERAL"
+    assert plan.workflow == expected_workflow
+
+    primary_role_ids = {role.role_id for role in plan.primary_roles}
+    assert "CONTROL_TOWER" in primary_role_ids
+    assert primary_role_ids == set(expected_workflow.primary_roles)
+
+    support_role_ids = {role.role_id for role in plan.support_roles}
+    assert support_role_ids == set(expected_workflow.support_roles)
+
+    assert plan.risk.risk_level == "LOW"
+    assert plan.risk.approval_mode == "NONE"
+
+
+@pytest.mark.parametrize(
+    "message,expected_workflow_id",
+    [
+        ("Jelaskan fungsi database.", "GENERAL"),
+        ("Perbaiki fungsi database connection ini.", "TECHNICAL"),
+        ("Debug fungsi generate_text.", "TECHNICAL"),
+        ("Buat strategi NOVA 2027.", "STRATEGY"),
+    ],
+)
+def test_generate_plan_intent_regression_cases(
+    message: str, expected_workflow_id: str
+) -> None:
+    plan = generate_plan(message)
+    assert plan.workflow.workflow_id == expected_workflow_id
+    assert plan.workflow == get_workflow(expected_workflow_id)
