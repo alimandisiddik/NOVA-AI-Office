@@ -25,6 +25,10 @@ REGISTERED_JOBS: dict[str, NightJobClassification] = {
     "secret_change": NightJobClassification("secret_change", "secret_change", PROHIBITED),
     "purchase": NightJobClassification("purchase", "paid_action", PROHIBITED),
     "destructive_migration": NightJobClassification("destructive_migration", "destructive_migration", PROHIBITED),
+    "git_merge": NightJobClassification("git_merge", "git_mutation", PROHIBITED),
+    "git_reset": NightJobClassification("git_reset", "git_mutation", PROHIBITED),
+    "git_rebase": NightJobClassification("git_rebase", "git_mutation", PROHIBITED),
+    "telegram_outbound_message": NightJobClassification("telegram_outbound_message", "external_communication", PROHIBITED),
 }
 
 

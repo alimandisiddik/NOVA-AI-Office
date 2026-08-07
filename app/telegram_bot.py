@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Final, cast
 
 from telegram import Update
@@ -28,6 +30,9 @@ from app.memory.formatters import (
     tasks_message,
 )
 from app.nightshift.service import NightShiftService
+
+from app.nightshift.worker import NightShiftWorker
+
 from app.control_tower.service import ControlTowerService
 
 from app.dispatch.service import DispatchService
@@ -87,6 +92,7 @@ HELP_MESSAGE: Final = (
     "/project, /projects, /task, /tasks, /note, /decision\n"
     "/capture, /today, /approvals, /shutdown, /morning\n"
     "/dispatch, /dispatches, /dispatchstatus, /approve, /reject, /canceldispatch, /retrydispatch\n"
+    "/nightshift, /nightstatus, /nightqueue [cancel <job_id>], /wake\n"
     "/resume, /progress, /continue\n"
     "/route <pesan> — klasifikasi cepat\n"
     "/plan <pesan> — rencana eksekusi lengkap\n"
@@ -960,6 +966,118 @@ async def handle_retrydispatch(update: Update, context: ContextTypes.DEFAULT_TYP
         await _dispatch_reply_error(message, "Retry failed", error)
 
 
+
+async def nightshift_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message:
+        await message.reply_text("Night Shift Automation Runtime is operational.")
+
+async def nightstatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message:
+        night_shift = context.application.bot_data.get("night_shift")
+        if not night_shift:
+             await message.reply_text("Night Shift is unavailable.")
+             return
+        mode = night_shift.repository.get_mode()
+        await message.reply_text(f"Night Shift Mode: {mode.mode if mode else 'Unknown'}")
+
+async def nightqueue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if not message:
+        return
+    night_worker = context.application.bot_data.get("night_worker")
+    if not night_worker:
+        await message.reply_text("Night Worker is unavailable.")
+        return
+
+    args = context.args or []
+    if args and args[0] == "cancel":
+        if len(args) < 2:
+            await message.reply_text("Usage: /nightqueue cancel <job_id>")
+            return
+        job_id = args[1]
+        job = night_worker.repository.get_job_by_job_id(job_id)
+        if job is None:
+            await message.reply_text("No such Night Shift job.")
+            return
+        try:
+            cancelled = night_worker.cancel_job(job, "cancelled via telegram", actor=f"user:{update.effective_user.id}")
+        except Exception:
+            await message.reply_text("That job could not be cancelled (it may already be terminal).")
+            return
+        await message.reply_text(f"Cancelled {cancelled.job_id} (status: {cancelled.status}).")
+        return
+
+    jobs = night_worker.repository.list_jobs(status="queued") + night_worker.repository.list_jobs(status="preparing")
+    if not jobs:
+        await message.reply_text("Night Shift Queue is empty.")
+        return
+    lines = [f"Night Shift Queue: {len(jobs)} in progress"]
+    for j in jobs[:5]:
+        lines.append(f"• {j.job_id}: {j.job_type} (attempt {j.attempt_count}, status {j.status})")
+    await message.reply_text("\n".join(lines))
+
+async def wake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message:
+        night_shift = context.application.bot_data.get("night_shift")
+        if not night_shift:
+             await message.reply_text("Night Shift is unavailable.")
+             return
+        night_shift.transition_runtime_mode("active", True, "telegram_user", "Manual wake up via Telegram")
+        await message.reply_text("System mode set to active. Night Shift paused.")
+
+
+_nightshift_tick_lock = threading.Lock()
+
+
+def _nightshift_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scheduler callback for `application.job_queue.run_repeating`.
+
+    PTB (>=20) passes custom data via `Job.data`, retrieved here as
+    `context.job.data` — not `context.job.context`, which does not exist on
+    the installed python-telegram-bot version. A non-blocking lock skips an
+    overlapping invocation (e.g. a slow tick still running when the next is
+    due) rather than allowing two ticks to process the same jobs concurrently.
+    """
+    if not _nightshift_tick_lock.acquire(blocking=False):
+        LOGGER.error("night_shift_tick event=skipped_overlap")
+        return
+    try:
+        data = getattr(context.job, "data", None) or {}
+        night_shift = data.get("night_shift")
+        night_worker = data.get("night_worker")
+        if night_shift is not None:
+            try:
+                night_shift.tick(datetime.now(UTC))
+            except Exception:
+                LOGGER.error("night_shift_tick event=tick_failed")
+        if night_worker is None:
+            return
+        for job in night_worker.list_eligible_jobs():
+            try:
+                claimed = night_worker.claim_job(job)
+                night_worker.execute_via_dispatch(claimed)
+            except Exception:
+                LOGGER.error("night_shift_tick event=job_isolated_failure job_id=%s", getattr(job, "job_id", "-"))
+        for stale in night_worker.repository.list_jobs(status="preparing"):
+            try:
+                night_worker.recover_stale_job(stale)
+            except Exception:
+                LOGGER.error("night_shift_tick event=recovery_isolated_failure job_id=%s", getattr(stale, "job_id", "-"))
+    finally:
+        _nightshift_tick_lock.release()
+
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
@@ -969,6 +1087,7 @@ def build_application(
     control_tower: ControlTowerService | None = None,
     dispatch: DispatchService | None = None,
     approvals: ApprovalService | None = None,
+    night_worker: NightShiftWorker | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -981,6 +1100,8 @@ def build_application(
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
         application.bot_data["approval_svc"] = approvals
+    if night_worker:
+        application.bot_data["night_worker"] = night_worker
     application.bot_data["provider"] = provider
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -1014,6 +1135,11 @@ def build_application(
     application.add_handler(CommandHandler("approvals", approvals_handler))
     application.add_handler(CommandHandler("shutdown", shutdown_handler))
     application.add_handler(CommandHandler("morning", morning_handler))
+    application.add_handler(CommandHandler("nightshift", nightshift_command))
+    application.add_handler(CommandHandler("nightstatus", nightstatus_command))
+    application.add_handler(CommandHandler("nightqueue", nightqueue_command))
+    application.add_handler(CommandHandler("wake", wake_command))
+
 
     if dispatch is not None:
         application.add_handler(CommandHandler("dispatch", handle_dispatch))
@@ -1023,5 +1149,16 @@ def build_application(
         application.add_handler(CommandHandler("reject", handle_reject))
         application.add_handler(CommandHandler("canceldispatch", handle_canceldispatch))
         application.add_handler(CommandHandler("retrydispatch", handle_retrydispatch))
+
+    # Register the Night Shift automation tick exactly once per build_application()
+    # call. Missing JobQueue support (e.g. python-telegram-bot installed without
+    # the [job-queue] extra) fails safe: no automation runs, nothing else breaks.
+    if getattr(application, "job_queue", None) is not None:
+        application.job_queue.run_repeating(
+            _nightshift_tick,
+            interval=300,
+            first=10,
+            data={"night_shift": night_shift, "night_worker": night_worker},
+        )
 
     return application
