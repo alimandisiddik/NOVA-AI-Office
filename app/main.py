@@ -155,6 +155,7 @@ def main() -> int:
                 "coding": settings.nova_provider_coding_combo_priority or ["nova-v1-coding", "nova-v1-coding-fallback"],
                 "review": settings.nova_provider_review_combo_priority or ["nova-v1-review", "nova-v1-review-fallback"],
             },
+            upstream_route_overrides=settings.nova_provider_upstream_route_map,
         )
         try:
             provider_svc.initialize()

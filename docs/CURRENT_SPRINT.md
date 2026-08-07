@@ -141,3 +141,56 @@ combo today.
 
 Known limitation: the Codex and Claude adapters are configuration-gated safe
 stubs in this sprint and execute no CLI command or arbitrary shell input.
+
+## Wave 5.1 — Sprint 5G.1 9Router Upstream Route Mapping Runtime Fix
+
+Status: Implemented locally against `httpx.MockTransport`; **not yet
+validated against a live 9Router deployment by an operator** — do not mark
+this remediation complete until that live confirmation happens.
+
+Root cause: Sprint 5G's `NineRouterAdapter` sent NOVA's own internal route
+aliases (`nova-v1`, `nova-v1-coding`, `nova-v1-review`, ...) directly as the
+`model` field to `POST /v1/chat/completions`. 9Router does not recognize
+those aliases — confirmed via runtime evidence: `GET /v1/models` returns
+9Router's real combo IDs (`general`, `Development`, `review`, `Fast`, ...),
+and a direct `POST` with `model="general"` returns HTTP 200 with the actual
+resolved model `gemini-pro-default`, while NOVA's `/ask` command (sending
+`nova-v1`) returned HTTP 404.
+
+Fix: an explicit, additive translation layer distinguishing three identities
+that were previously conflated into one field:
+
+1. **NOVA-internal route alias** (`nova-v1`, `nova-v1-coding`, `nova-v1-review`,
+   ...) — stable, used throughout selection, fallback, and audit; never sent
+   upstream.
+2. **Upstream/provider route identity** (9Router's own combo ID — `general`,
+   `Development`, `review`, `Fast`) — new `RegisteredModel.upstream_route_id`
+   field (`app/providers/registry.py`), resolved per-request via
+   `resolve_upstream_route_id()` (`app/providers/selection.py`), configurable
+   per-alias override via `NOVA_PROVIDER_UPSTREAM_ROUTE_MAP`. This is what
+   `NineRouterAdapter` now sends as `model`.
+3. **Actual resolved model** (what 9Router itself reports it used, e.g.
+   `gemini-pro-default`) — unchanged mechanism (`ProviderResponse.model_id`),
+   now falls back to the upstream route rather than the internal alias when
+   9Router's response omits `model`.
+
+A NOVA alias routed through 9Router with no evidenced or configured upstream
+mapping is excluded from the resolved provider chain at selection time — it
+is never sent upstream as a literal internal alias (the exact defect this
+sprint fixes), and `NineRouterAdapter` additionally refuses to make a network
+call at all without a resolved upstream route, as defense in depth.
+`nova-v1-coding-fallback` and `nova-v1-review-fallback` (introduced by
+Sprint 5G, never evidenced against a real 9Router deployment) are left
+unmapped by design rather than guessing; `nova-v1-fallback` (pre-existing
+since Sprint 4A/4B) is a deliberate, documented exception mapped to the same
+evidenced `general` combo as `nova-v1`, to preserve backward-compatible
+fallback behavior rather than silently disabling long-standing behavior.
+
+Base URL contract clarified and enforced:
+`NOVA_PROVIDER_BASE_URL` must be the 9Router host root (e.g.
+`http://localhost:20128`), never including a trailing `/v1` — the adapter
+always appends `/v1/chat/completions` itself. `ProviderGatewayService`
+now rejects a base URL ending in `/v1` at startup.
+
+See `docs/SPRINT_5G1.md` for the full architecture decision, file-level
+change list, and test evidence.

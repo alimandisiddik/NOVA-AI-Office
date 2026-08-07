@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from dataclasses import dataclass
 
-from app.providers.registry import get_registered_model
+from app.providers.registry import RegisteredModel, get_registered_model
 
 
 @dataclass(frozen=True)
 class ProviderCandidate:
     provider_id: str
     model_id: str
+    # The upstream/provider route identity actually sent to the adapter --
+    # distinct from ``model_id`` (the NOVA-internal alias). ``None`` for
+    # providers where this concept does not apply (e.g. the Codex/Claude
+    # direct stubs, which are not 9Router-routed).
+    upstream_route_id: str | None = None
+
+
+def resolve_upstream_route_id(model: RegisteredModel, overrides: Mapping[str, str]) -> str | None:
+    """Resolve the effective upstream route for a registered model.
+
+    A configured override always wins over the registry default, so an
+    operator can repoint or add a mapping (e.g. if 9Router renames a combo)
+    without a code change. Returns ``None`` when neither is set -- callers
+    must treat that as "not configured" for any provider that requires a
+    real upstream identity, never fall back to sending the internal alias.
+    """
+    override = overrides.get(model.model_id)
+    return override if override else model.upstream_route_id
 
 
 def select_eligible_models(
@@ -65,8 +83,10 @@ def select_provider_chain(
     combo_priorities: dict[str, list[str]],
     allowed_models: list[str],
     configured_specialists: frozenset[str],
+    upstream_route_overrides: Mapping[str, str] | None = None,
 ) -> list[ProviderCandidate]:
     """Resolve the deterministic cross-provider chain for one classified task."""
+    overrides = upstream_route_overrides or {}
     if workflow_id == "TECHNICAL" and role_id == "EXECUTION_WORKER":
         groups = (["codex-direct"] if "Codex" in configured_specialists else []) + ["coding_or_generic"]
     elif workflow_id == "TECHNICAL" and role_id == "TECHNICAL_ARCHITECT":
@@ -92,6 +112,14 @@ def select_provider_chain(
                 continue
             if workflow_id not in model.supported_workflows or role_id not in model.supported_roles:
                 continue
+            upstream_route_id = resolve_upstream_route_id(model, overrides)
+            if model.provider_id == "9Router" and not upstream_route_id:
+                # No evidenced or configured upstream route for this NOVA
+                # alias -- excluded rather than ever sending the internal
+                # alias itself to 9Router (the Sprint 5G.1 defect). A
+                # fallback alias with no distinct upstream identity simply
+                # stays unreachable until an operator configures one.
+                continue
             seen.add(model_id)
-            candidates.append(ProviderCandidate(model.provider_id, model_id))
+            candidates.append(ProviderCandidate(model.provider_id, model_id, upstream_route_id))
     return candidates

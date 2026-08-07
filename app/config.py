@@ -32,6 +32,10 @@ class Settings:
     nova_claude_executable_path: str = ""
     nova_provider_coding_combo_priority: list[str] = None
     nova_provider_review_combo_priority: list[str] = None
+    # NOVA internal alias -> 9Router upstream/combo route id overrides
+    # (Sprint 5G.1). Registry defaults in app/providers/registry.py are
+    # authoritative unless overridden here.
+    nova_provider_upstream_route_map: dict[str, str] = None
 
     # Google Workspace Settings (Optional at startup)
     google_client_secrets_path: Path | None = None
@@ -89,6 +93,25 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     coding_priority = environment.get("NOVA_PROVIDER_CODING_COMBO_PRIORITY", "").strip()
     review_priority = environment.get("NOVA_PROVIDER_REVIEW_COMBO_PRIORITY", "").strip()
 
+    upstream_route_map_raw = environment.get("NOVA_PROVIDER_UPSTREAM_ROUTE_MAP", "").strip()
+    upstream_route_map: dict[str, str] = {}
+    if upstream_route_map_raw:
+        for entry in upstream_route_map_raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if ":" not in entry:
+                raise ConfigurationError(
+                    "NOVA_PROVIDER_UPSTREAM_ROUTE_MAP entries must be 'alias:route' pairs"
+                )
+            alias, _, route = entry.partition(":")
+            alias, route = alias.strip(), route.strip()
+            if not alias or not route:
+                raise ConfigurationError(
+                    "NOVA_PROVIDER_UPSTREAM_ROUTE_MAP entries must have a non-empty alias and route"
+                )
+            upstream_route_map[alias] = route
+
     # Google Workspace Config
     google_secrets = environment.get("GOOGLE_CLIENT_SECRETS_PATH", "").strip()
     google_token = environment.get("GOOGLE_TOKEN_STORAGE_PATH", "").strip()
@@ -120,6 +143,7 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         nova_claude_executable_path=claude_path,
         nova_provider_coding_combo_priority=[item.strip() for item in coding_priority.split(",") if item.strip()],
         nova_provider_review_combo_priority=[item.strip() for item in review_priority.split(",") if item.strip()],
+        nova_provider_upstream_route_map=upstream_route_map,
         google_client_secrets_path=Path(google_secrets) if google_secrets else None,
         google_token_storage_path=Path(google_token) if google_token else None,
         google_oauth_port=google_port,

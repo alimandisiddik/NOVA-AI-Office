@@ -48,4 +48,11 @@ MIGRATIONS = (
     "ALTER TABLE provider_request_audit ADD COLUMN initial_provider_id TEXT;",
     "ALTER TABLE provider_request_audit ADD COLUMN final_provider_id TEXT;",
     "ALTER TABLE provider_request_audit ADD COLUMN resolved_model_label TEXT;",
+    # 5G.1 migrations: distinguish the upstream/provider route identity
+    # actually dispatched to (e.g. 9Router's "general" combo) from both the
+    # NOVA-internal alias (model_id) and the actual resolved model reported
+    # by the provider (resolved_model_label) -- see docs/SPRINT_5G1.md.
+    "ALTER TABLE provider_request_attempts ADD COLUMN upstream_route_id TEXT;",
+    "ALTER TABLE provider_request_audit ADD COLUMN initial_upstream_route_id TEXT;",
+    "ALTER TABLE provider_request_audit ADD COLUMN final_upstream_route_id TEXT;",
 )

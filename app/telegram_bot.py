@@ -71,6 +71,7 @@ from app.execution.repository import (
 )
 from app.providers.service import ProviderGatewayService
 from app.providers.registry import get_registered_model
+from app.providers.selection import resolve_upstream_route_id
 from app.providers.errors import ProviderError
 from app.execution.formatters import (
     execution_approved_message,
@@ -681,9 +682,18 @@ async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_T
                 available = "available" if adapter is not None and adapter.is_available() else "unavailable"
             except Exception:
                 available = "unknown"
+            # Sprint 5G.1: the internal NOVA alias (model_id) and the
+            # upstream/provider route actually dispatched to are two
+            # distinct identities -- never conflate them in status output.
+            upstream = (
+                resolve_upstream_route_id(model, provider.upstream_route_overrides)
+                if model is not None
+                else None
+            )
+            upstream_label = upstream if upstream else "UNCONFIGURED (excluded from chain)"
             model_lines.append(
-                f"  - [{group_name}] {model_id}: {enabled}; provider={provider_id}; "
-                f"availability={available}; circuit={circuit_state}"
+                f"  - [{group_name}] alias={model_id} -> upstream_route={upstream_label}: {enabled}; "
+                f"provider={provider_id}; availability={available}; circuit={circuit_state}"
             )
 
     specialist_lines = []
@@ -711,7 +721,7 @@ async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_T
         "Direct Specialist Adapters (safe stubs until configured):",
     ] + specialist_lines + [
         "",
-        f"Most Recent Successful Model: {recent_success}",
+        f"Most Recent Successful Alias (internal, not upstream): {recent_success}",
         f"Last Fallback Reason: {fallback_reason}",
     ]
     await effective_message.reply_text("\n".join(lines))

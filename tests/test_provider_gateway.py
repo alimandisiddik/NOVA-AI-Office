@@ -142,7 +142,12 @@ async def test_timeout_falls_back_once_without_confirmation(repo) -> None:
 
     service = _service(repo, handler, [MODEL_1, MODEL_2])
     assert await service.generate_text("Hello there", AUTHORIZED_USER) == "fallback"
-    assert calls == [MODEL_1, MODEL_2]
+    # Sprint 5G.1: the wire payload carries the upstream route ("general"),
+    # never the internal alias (MODEL_1/MODEL_2) -- both nova-v1 and
+    # nova-v1-fallback resolve to the same runtime-evidenced "general"
+    # combo (see app/providers/registry.py for why nova-v1-fallback is a
+    # deliberate exception to the "leave unmapped" default).
+    assert calls == ["general", "general"]
     assert service.last_successful_model == MODEL_2
     assert service.last_fallback_reason == "timeout_error"
 
@@ -191,8 +196,21 @@ async def test_runtime_never_attempts_a_model_twice(repo) -> None:
     service = _service(repo, handler, [MODEL_1, MODEL_2, MODEL_3])
     with pytest.raises(TimeoutError):
         await service.generate_text("Hello there", AUTHORIZED_USER)
-    assert calls == [MODEL_1, MODEL_2, MODEL_3]
-    assert len(calls) == len(set(calls))
+    # Sprint 5G.1: the wire payload carries the upstream route, not the
+    # internal alias -- nova-v1 and nova-v1-fallback both legitimately
+    # resolve to "general" (a deliberate backward-compatibility exception,
+    # see registry.py), so the upstream calls are NOT all distinct even
+    # though NOVA never re-attempts the same *internal* alias twice.
+    assert calls == ["general", "general", "Fast"]
+    with repo._db.connection() as connection:
+        attempted_aliases = [
+            row["model_id"]
+            for row in connection.execute(
+                "SELECT model_id FROM provider_request_attempts ORDER BY attempt_number"
+            ).fetchall()
+        ]
+    assert attempted_aliases == [MODEL_1, MODEL_2, MODEL_3]
+    assert len(attempted_aliases) == len(set(attempted_aliases))
 
 
 @pytest.mark.anyio

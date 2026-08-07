@@ -9,6 +9,7 @@ from app.providers.models import ProviderRequest, ProviderResponse
 from app.providers.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConfigurationError,
     ConnectionError,
     InvalidResponseError,
     ProviderError,
@@ -41,14 +42,28 @@ class NineRouterAdapter:
         *,
         timeout_seconds: float,
     ) -> ProviderResponse:
-        """Call the /v1/chat/completions endpoint."""
+        """Call the /v1/chat/completions endpoint.
+
+        Sends ``request.upstream_route_id`` -- 9Router's own combo/route
+        identity (e.g. "general") -- never ``request.model_id``, which is
+        NOVA's internal alias (e.g. "nova-v1") and is meaningless to
+        9Router. See Sprint 5G.1 (``docs/SPRINT_5G1.md``) for why these must
+        stay distinct. Selection already excludes any NOVA alias lacking a
+        configured upstream route, so reaching this method without one
+        indicates a caller bypassed that seam -- fail closed rather than
+        ever falling back to sending the internal alias upstream.
+        """
+        if not request.upstream_route_id:
+            raise ConfigurationError(
+                "No upstream route configured for this provider request; refusing to send the internal alias."
+            )
         endpoint = f"{self.base_url}/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         payload = {
-            "model": request.model_id,
+            "model": request.upstream_route_id,
             "messages": [
                 {
                     "role": "user",
@@ -129,7 +144,12 @@ class NineRouterAdapter:
         return ProviderResponse(
             request_id=request.request_id,
             content=content,
-            model_id=data.get("model", request.model_id),
+            # The actual resolved model 9Router reports (e.g.
+            # "gemini-pro-default") -- a third, distinct identity from both
+            # the NOVA alias and the upstream route. Falls back to the
+            # upstream route (never the internal alias) if 9Router omits
+            # "model" from the response.
+            model_id=data.get("model", request.upstream_route_id),
             usage_prompt_tokens=usage.get("prompt_tokens", 0),
             usage_completion_tokens=usage.get("completion_tokens", 0),
             usage_total_tokens=usage.get("total_tokens", 0),

@@ -82,6 +82,7 @@ class ProviderGatewayService:
         allowed_models: list[str],
         *,
         combo_priorities: Mapping[str, list[str]] | None = None,
+        upstream_route_overrides: Mapping[str, str] | None = None,
     ) -> None:
         self._repo = repository
         self._adapters = {"9Router": adapter} if not isinstance(adapter, Mapping) else dict(adapter)
@@ -92,6 +93,11 @@ class ProviderGatewayService:
         self.combo_priorities = {"generic": list(model_priority)}
         if combo_priorities:
             self.combo_priorities.update({name: list(priority) for name, priority in combo_priorities.items()})
+        # NOVA-internal alias -> upstream/provider route identity overrides
+        # (Sprint 5G.1). Registry defaults (app/providers/registry.py) are
+        # authoritative unless explicitly overridden here, sourced from
+        # NOVA_PROVIDER_UPSTREAM_ROUTE_MAP -- see resolve_upstream_route_id().
+        self.upstream_route_overrides = dict(upstream_route_overrides or {})
         self.circuit_breaker = CircuitBreaker()
         self.last_successful_model: str | None = None
         self.last_fallback_reason: str | None = None
@@ -109,6 +115,16 @@ class ProviderGatewayService:
         parsed = urlparse(self.base_url)
         if not parsed.hostname or (parsed.scheme != "https" and parsed.hostname != "localhost"):
             raise ConfigurationError("Provider base URL must use HTTPS (except localhost testing).")
+        # Sprint 5G.1: NineRouterAdapter always appends "/v1/chat/completions"
+        # itself. A base URL that already ends in "/v1" would silently
+        # double it (".../v1/v1/chat/completions") and 404 -- exactly the
+        # runtime failure mode this sprint fixes. base_url must be the host
+        # root only (e.g. "https://api.9router.com", not ".../v1").
+        if parsed.path.rstrip("/").endswith("/v1"):
+            raise ConfigurationError(
+                "Provider base URL must be the host root, not include a trailing '/v1' "
+                "(NineRouterAdapter appends '/v1/chat/completions' itself)."
+            )
         if not self.model_priority:
             raise ConfigurationError("NOVA_PROVIDER_MODEL_PRIORITY is empty or invalid.")
         for group, priority in self.combo_priorities.items():
@@ -139,6 +155,7 @@ class ProviderGatewayService:
         chain = select_provider_chain(
             workflow_id, role_id, combo_priorities=self.combo_priorities,
             allowed_models=self.allowed_models, configured_specialists=self._configured_specialists(),
+            upstream_route_overrides=self.upstream_route_overrides,
         )
         if not chain:
             self._audit(request_id, user_id, prompt, workflow_id, role_id, "failed", "configuration_error", None, None, [], 0, None)
@@ -153,6 +170,7 @@ class ProviderGatewayService:
         response: ProviderResponse | None = None
         final_provider_id: str | None = None
         final_model_id: str | None = None
+        final_upstream_route_id: str | None = None
 
         for candidate in chain:
             if live_attempts >= MAX_TOTAL_ATTEMPTS:
@@ -163,7 +181,7 @@ class ProviderGatewayService:
                 last_error = ConnectionError("Provider route is unavailable.")
                 last_outcome = ProviderOutcome.PROVIDER_UNAVAILABLE
                 fallback_reason = fallback_reason or last_outcome.value
-                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, 0, last_outcome.value, "skipped", _utc_now(), candidate.provider_id))
+                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, 0, last_outcome.value, "skipped", _utc_now(), candidate.provider_id, candidate.upstream_route_id))
                 continue
             try:
                 self.circuit_breaker.check_request_allowed(circuit_key)
@@ -171,12 +189,15 @@ class ProviderGatewayService:
                 last_error = error
                 last_outcome = ProviderOutcome.PROVIDER_UNAVAILABLE
                 fallback_reason = fallback_reason or last_outcome.value
-                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, 0, last_outcome.value, "skipped", _utc_now(), candidate.provider_id))
+                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, 0, last_outcome.value, "skipped", _utc_now(), candidate.provider_id, candidate.upstream_route_id))
                 continue
 
             live_attempts += 1
             started_at = time.monotonic()
-            request = ProviderRequest(request_id, user_id, candidate.provider_id, candidate.model_id, workflow_id, role_id, prompt)
+            request = ProviderRequest(
+                request_id, user_id, candidate.provider_id, candidate.model_id, workflow_id, role_id, prompt,
+                upstream_route_id=candidate.upstream_route_id,
+            )
             try:
                 response = await adapter.generate_text(request, timeout_seconds=DEFAULT_TIMEOUT_SECONDS)
             except ProviderError as error:
@@ -184,7 +205,7 @@ class ProviderGatewayService:
                 last_error = error
                 last_outcome = outcome_for_error(error)
                 fallback_reason = fallback_reason or error.category
-                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), last_outcome.value, "failed", _utc_now(), candidate.provider_id))
+                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), last_outcome.value, "failed", _utc_now(), candidate.provider_id, candidate.upstream_route_id))
                 if is_fallback_eligible(last_outcome):
                     continue
                 break
@@ -201,33 +222,66 @@ class ProviderGatewayService:
                 self.circuit_breaker.record_failure(circuit_key)
                 last_error = ProviderError("Provider execution failed.")
                 last_outcome = ProviderOutcome.MODEL_ERROR
-                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), last_outcome.value, "failed", _utc_now(), candidate.provider_id))
+                attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), last_outcome.value, "failed", _utc_now(), candidate.provider_id, candidate.upstream_route_id))
                 break
 
             self.circuit_breaker.record_success(circuit_key)
             final_provider_id, final_model_id = candidate.provider_id, candidate.model_id
-            attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), None, "success", _utc_now(), candidate.provider_id))
+            final_upstream_route_id = candidate.upstream_route_id
+            attempts.append(ProviderRequestAttempt(len(attempts) + 1, candidate.model_id, int((time.monotonic() - started_at) * 1000), None, "success", _utc_now(), candidate.provider_id, candidate.upstream_route_id))
             break
 
         if response is None:
             self.last_fallback_reason = fallback_reason
-            self._audit(request_id, user_id, prompt, workflow_id, role_id, "failed", (last_outcome or ProviderOutcome.MODEL_ERROR).value, initial.model_id, None, attempts, 0, fallback_reason, initial.provider_id, None, None, live_attempts)
+            self._audit(
+                request_id, user_id, prompt, workflow_id, role_id, "failed",
+                (last_outcome or ProviderOutcome.MODEL_ERROR).value, initial.model_id, None, attempts, 0, fallback_reason,
+                initial.provider_id, None, None, live_attempts,
+                initial_upstream_route_id=initial.upstream_route_id, final_upstream_route_id=None,
+            )
             if live_attempts == 0 and attempts and all(attempt.status == "skipped" for attempt in attempts):
                 raise ConfigurationError("No eligible provider route supports this workflow and role.")
             raise last_error or ProviderError("No provider route completed.")
 
         response_size = len(response.content.encode("utf-8"))
         if response_size > OUTPUT_BYTE_LIMIT:
-            self._audit(request_id, user_id, prompt, workflow_id, role_id, "failed", ProviderOutcome.MODEL_ERROR.value, initial.model_id, final_model_id, attempts, response_size, fallback_reason, initial.provider_id, final_provider_id, response.model_id, live_attempts)
+            self._audit(
+                request_id, user_id, prompt, workflow_id, role_id, "failed",
+                ProviderOutcome.MODEL_ERROR.value, initial.model_id, final_model_id, attempts, response_size, fallback_reason,
+                initial.provider_id, final_provider_id, response.model_id, live_attempts,
+                initial_upstream_route_id=initial.upstream_route_id, final_upstream_route_id=final_upstream_route_id,
+            )
             raise OutputLimitError("Provider response exceeded the configured output limit.")
 
         self.last_successful_model = final_model_id
         self.last_fallback_reason = fallback_reason
-        self._audit(request_id, user_id, prompt, workflow_id, role_id, "success", None, initial.model_id, final_model_id, attempts, response_size, fallback_reason, initial.provider_id, final_provider_id, response.model_id, live_attempts)
+        self._audit(
+            request_id, user_id, prompt, workflow_id, role_id, "success",
+            None, initial.model_id, final_model_id, attempts, response_size, fallback_reason,
+            initial.provider_id, final_provider_id, response.model_id, live_attempts,
+            initial_upstream_route_id=initial.upstream_route_id, final_upstream_route_id=final_upstream_route_id,
+        )
         return response.content
 
-    def _audit(self, request_id: str, user_id: int, prompt: str, workflow_id: str, role_id: str, status: str, error_category: str | None, initial_model_id: str | None, final_model_id: str | None, attempts: list[ProviderRequestAttempt], response_size: int, fallback_reason: str | None, initial_provider_id: str | None = None, final_provider_id: str | None = None, resolved_model_label: str | None = None, live_attempts: int = 0) -> None:
+    def _audit(
+        self, request_id: str, user_id: int, prompt: str, workflow_id: str, role_id: str, status: str,
+        error_category: str | None, initial_model_id: str | None, final_model_id: str | None,
+        attempts: list[ProviderRequestAttempt], response_size: int, fallback_reason: str | None,
+        initial_provider_id: str | None = None, final_provider_id: str | None = None,
+        resolved_model_label: str | None = None, live_attempts: int = 0,
+        *, initial_upstream_route_id: str | None = None, final_upstream_route_id: str | None = None,
+    ) -> None:
         try:
-            self._repo.log_request(ProviderAuditRecord(request_id, None, user_id, final_provider_id or initial_provider_id or "9Router", final_model_id or initial_model_id or "UNKNOWN", workflow_id, role_id, status, hash_text(prompt), response_size, 0, 0, error_category, _utc_now(), _utc_now(), initial_model_id, final_model_id, live_attempts, int(live_attempts > 1), fallback_reason, initial_provider_id, final_provider_id, resolved_model_label), attempts)
+            self._repo.log_request(
+                ProviderAuditRecord(
+                    request_id, None, user_id, final_provider_id or initial_provider_id or "9Router",
+                    final_model_id or initial_model_id or "UNKNOWN", workflow_id, role_id, status,
+                    hash_text(prompt), response_size, 0, 0, error_category, _utc_now(), _utc_now(),
+                    initial_model_id, final_model_id, live_attempts, int(live_attempts > 1), fallback_reason,
+                    initial_provider_id, final_provider_id, resolved_model_label,
+                    initial_upstream_route_id, final_upstream_route_id,
+                ),
+                attempts,
+            )
         except Exception:
             LOGGER.exception("Provider audit write failed.")
