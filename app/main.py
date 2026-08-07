@@ -16,6 +16,7 @@ from app.control_tower.service import ControlTowerService
 from app.dispatch.registry import AgentRegistry
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.service import DispatchService
+from app.nightshift.worker import NightShiftWorker
 
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
 from app.providers.ninerouter import NineRouterAdapter
@@ -96,7 +97,6 @@ def main() -> int:
         logger.error("Night Shift Runtime schema initialization failed.")
         return 1
 
-
     registry_svc = AgentRegistry()
     approval_svc = ApprovalService(MemoryDatabase(settings.nova_memory_db_path), authorized_user_id=settings.telegram_allowed_user_id)
     try:
@@ -111,6 +111,13 @@ def main() -> int:
     except MemoryDatabaseError:
         logger.error("Dispatch Service schema initialization failed.")
         return 1
+
+    night_worker = NightShiftWorker(
+        service=night_shift,
+        dispatch_service=dispatch_svc,
+        approval_service=approval_svc,
+        agent_registry=registry_svc
+    )
 
     control_tower = ControlTowerService(
         MemoryDatabase(settings.nova_memory_db_path),
@@ -142,7 +149,7 @@ def main() -> int:
             logger.error("Provider Gateway initialization failed; continuing without it.")
             provider_svc = None
 
-    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc)
+    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc, night_worker)
     application.run_polling()
     return 0
 

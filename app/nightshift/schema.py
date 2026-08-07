@@ -49,6 +49,28 @@ CREATE INDEX IF NOT EXISTS idx_night_audit_created ON night_shift_audit_log(crea
 """
 
 
+# Sprint 5F additive columns on the pre-existing 5A.1 `night_queue_jobs` table.
+# Guarded by PRAGMA table_info(...) so a repeated call never re-runs ALTER TABLE
+# for a column that already exists, and any genuinely unexpected
+# sqlite3.OperationalError (a real schema problem, not "column already exists")
+# propagates instead of being swallowed.
+_ADDITIVE_COLUMNS: dict[str, str] = {
+    "dispatch_id": "TEXT",
+    "lease_worker_id": "TEXT",
+    "lease_expires_at": "TEXT",
+    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+    "approval_id": "TEXT",
+}
+
+
 def apply_schema(connection: sqlite3.Connection) -> None:
     """Safely apply only additive DDL to a pre-existing NOVA database."""
     connection.executescript(SCHEMA)
+
+    existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(night_queue_jobs)").fetchall()}
+    for column, definition in _ADDITIVE_COLUMNS.items():
+        if column not in existing_columns:
+            connection.execute(f"ALTER TABLE night_queue_jobs ADD COLUMN {column} {definition}")
+
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_night_queue_lease ON night_queue_jobs(status, lease_expires_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_night_queue_dispatch ON night_queue_jobs(dispatch_id)")

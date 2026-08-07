@@ -16,6 +16,13 @@ def utc_now() -> str:
 def _job(row: sqlite3.Row) -> NightQueueJob:
     values = dict(row)
     values["approval_required"] = bool(values["approval_required"])
+    # Defensive defaults for the Sprint 5F additive columns, in case a row is
+    # read against a connection whose schema migration has not yet applied.
+    for col in ("dispatch_id", "lease_worker_id", "lease_expires_at", "approval_id"):
+        if col not in values:
+            values[col] = None
+    if "attempt_count" not in values:
+        values["attempt_count"] = 0
     return NightQueueJob(**values)
 
 
@@ -88,6 +95,86 @@ class NightShiftRepository:
             connection.execute("INSERT INTO night_shift_audit_log (event,actor,detail,related_job_id,created_at) VALUES (?,?,?,?,?)", ("night_job_transition", actor, f"{expected}->{target}", job_id, now))
             row = connection.execute("SELECT * FROM night_queue_jobs WHERE id = ?", (job_id,)).fetchone()
         return _job(row)
+
+    def get_job_by_job_id(self, job_id: str) -> NightQueueJob | None:
+        with self.database.connection() as connection:
+            row = connection.execute("SELECT * FROM night_queue_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return None if row is None else _job(row)
+
+    # -- Sprint 5F: lease/dispatch/approval/attempt metadata only. --
+    # None of the methods below ever writes `night_queue_jobs.status`; every
+    # legal status change must go through NightShiftService.transition_night_job(),
+    # which validates against the unmodified 5A.1 JOB_TRANSITIONS state machine.
+
+    def claim_lease(self, job_id: int, worker_id: str, expires_at: str, now: str) -> NightQueueJob | None:
+        """Atomically acquire a lease on a claimable, unleased-or-expired job.
+
+        Guards on `status` only as a read condition (claimable = 'queued' or
+        'preparing') — it never writes `status`. Returns ``None`` on a CAS
+        miss (already leased by another worker, or not in a claimable state).
+        """
+        with self.database.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE night_queue_jobs SET lease_worker_id = ?, lease_expires_at = ? "
+                "WHERE id = ? AND status IN ('queued','preparing') "
+                "AND (lease_worker_id IS NULL OR lease_expires_at <= ?)",
+                (worker_id, expires_at, job_id, now),
+            )
+            if cursor.rowcount == 0:
+                return None
+            connection.execute(
+                "INSERT INTO night_shift_audit_log (event,actor,detail,related_job_id,created_at) VALUES (?,?,?,?,?)",
+                ("job_claimed", worker_id, f"leased until {expires_at}", job_id, now),
+            )
+            row = connection.execute("SELECT * FROM night_queue_jobs WHERE id = ?", (job_id,)).fetchone()
+        return _job(row)
+
+    def release_lease(self, job_id: int, now: str, actor: str, event: str, detail: str = "") -> None:
+        with self.database.connection() as connection:
+            connection.execute(
+                "UPDATE night_queue_jobs SET lease_worker_id = NULL, lease_expires_at = NULL WHERE id = ?",
+                (job_id,),
+            )
+            connection.execute(
+                "INSERT INTO night_shift_audit_log (event,actor,detail,related_job_id,created_at) VALUES (?,?,?,?,?)",
+                (event, actor, detail, job_id, now),
+            )
+
+    def set_dispatch_id(self, job_id: int, dispatch_id: str) -> None:
+        with self.database.connection() as connection:
+            connection.execute("UPDATE night_queue_jobs SET dispatch_id = ? WHERE id = ?", (dispatch_id, job_id))
+
+    def set_approval_id(self, job_id: int, approval_id: str) -> None:
+        with self.database.connection() as connection:
+            connection.execute("UPDATE night_queue_jobs SET approval_id = ? WHERE id = ?", (approval_id, job_id))
+
+    def schedule_retry(self, job_id: int, attempt_count: int, eligible_after: str, failure_category: str, now: str, actor: str) -> None:
+        """Record a retryable failure and release the lease without touching `status`.
+
+        The job stays at its current (non-terminal) status; `list_eligible_jobs`
+        re-selects it once `eligible_after` passes and the lease is free.
+        """
+        with self.database.connection() as connection:
+            connection.execute(
+                "UPDATE night_queue_jobs SET attempt_count = ?, eligible_after = ?, failure_category = ?, "
+                "lease_worker_id = NULL, lease_expires_at = NULL WHERE id = ?",
+                (attempt_count, eligible_after, failure_category, job_id),
+            )
+            connection.execute(
+                "INSERT INTO night_shift_audit_log (event,actor,detail,related_job_id,created_at) VALUES (?,?,?,?,?)",
+                ("job_retry_scheduled", actor, f"attempt {attempt_count} eligible {eligible_after}", job_id, now),
+            )
+
+    def record_final_attempt(self, job_id: int, attempt_count: int, failure_category: str) -> None:
+        """Persist the final attempt count/category for a job about to become
+        terminal; does not touch `status`, `eligible_after`, or the lease, and
+        does not imply a retry (unlike `schedule_retry`)."""
+        with self.database.connection() as connection:
+            connection.execute(
+                "UPDATE night_queue_jobs SET attempt_count = ?, failure_category = ? WHERE id = ?",
+                (attempt_count, failure_category, job_id),
+            )
 
     def audit(self, event: str, actor: str, detail: str, now: str) -> None:
         with self.database.connection() as connection:

@@ -42,6 +42,11 @@ class NightQueueJob:
     approval_required: bool
     deduplication_key: str
     audit_metadata: str
+    dispatch_id: str | None = None
+    lease_worker_id: str | None = None
+    lease_expires_at: str | None = None
+    attempt_count: int = 0
+    approval_id: str | None = None
 
 
 @dataclass(frozen=True)

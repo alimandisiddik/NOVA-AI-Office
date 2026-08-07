@@ -92,5 +92,15 @@ mutations.
   `dispatches`/`dispatch_attempts`/`approvals`/`approval_audit`/
   `dispatch_audit_log`/`dispatch_leases` schema, and Control Tower's
   `list_approvals()` extended with the dispatch/approval source.
-- Sprint 5F — Full Night Shift Automation — not started; depends on 5B.1
-  merging first per `docs/WAVE_3_INTEGRATION_CONTRACT.md`'s merge order.
+- Sprint 5F — Full Night Shift Automation — implementation under review on
+  `sprint/5f-full-night-shift`, rebased onto merged 5B.1 (`8c6f64a`);
+  cooperative review in progress, not yet merged — see `docs/SPRINT_5F.md`.
+  Delivered: `NightShiftWorker` (claim/execute/defer/recover/cancel) driven
+  by `application.job_queue.run_repeating(...)`, consuming the real merged
+  `app/dispatch/` with no local stand-in; every status change routes
+  through `NightShiftService.transition_night_job()` and `JOB_TRANSITIONS`
+  is unmodified from `main`; additive `night_queue_jobs` lease/dispatch/
+  approval columns via a `PRAGMA table_info(...)`-guarded migration;
+  `/nightshift`, `/nightstatus`, `/nightqueue` (with `cancel <job_id>`),
+  `/wake`. Known limitation: approval-free automated completions rest at
+  `draft_saved`, not `completed` — see `docs/SPRINT_5F.md`.
