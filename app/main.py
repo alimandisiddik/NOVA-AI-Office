@@ -140,7 +140,7 @@ def main() -> int:
             adapter,
             settings.nova_provider_base_url,
             settings.nova_provider_api_key,
-            settings.nova_provider_default_model,
+            settings.nova_provider_model_priority,
             settings.nova_provider_allowed_models,
         )
         try:

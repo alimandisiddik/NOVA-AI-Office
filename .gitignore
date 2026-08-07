@@ -57,3 +57,5 @@ token.json
 .nova-google-token-*
 google_client*.json
 google_token*.json
+
+data/*.log

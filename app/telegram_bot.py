@@ -1214,8 +1214,6 @@ def build_application(
     application.add_handler(CommandHandler("cancelrun", cancelrun_command))
     application.add_handler(CommandHandler("ask", ask_command))
     application.add_handler(CommandHandler("providerstatus", providerstatus_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_error_handler(handle_error)
 
     application.add_handler(CommandHandler("capture", capture_handler))
     application.add_handler(CommandHandler("today", today_handler))
@@ -1237,6 +1235,10 @@ def build_application(
         application.add_handler(CommandHandler("reject", handle_reject))
         application.add_handler(CommandHandler("canceldispatch", handle_canceldispatch))
         application.add_handler(CommandHandler("retrydispatch", handle_retrydispatch))
+
+    # Generic text fallback must be registered after every command handler.
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_error_handler(handle_error)
 
     # Register the Night Shift automation tick exactly once per build_application()
     # call. Missing JobQueue support (e.g. python-telegram-bot installed without
