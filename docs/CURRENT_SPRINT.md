@@ -194,3 +194,26 @@ now rejects a base URL ending in `/v1` at startup.
 
 See `docs/SPRINT_5G1.md` for the full architecture decision, file-level
 change list, and test evidence.
+
+## Wave 5.2 — Sprint 5G.2 Intent Classification Runtime Fix
+
+Status: Implementation under review / not yet merged.
+
+Root cause: `app/router/classifier.py` treated `"fungsi"` ("function") as
+an undifferentiated technical keyword. A purely informational Telegram
+request ("Jelaskan dalam 3 kalimat apa fungsi Executive Control Tower di
+NOVA.") was misclassified TECHNICAL, which routed `/ask` into the review
+provider chain and failed with HTTP 429 — confirmed both via Telegram and
+via direct classifier reproduction with no network involved.
+
+Fix: technical vocabulary split into explicit ACTION verbs (always
+TECHNICAL) and DOMAIN nouns (TECHNICAL by default, suppressed to GENERAL
+only when the sentence itself is an explanatory/informational question,
+e.g. "Jelaskan fungsi X" / "What is X"). The same guard applies to a single
+weak Strategy keyword. Google Workspace, Presentation, and Academic
+routing are unaffected — those categories' concrete phrase/domain matches
+remain intent-agnostic by design. No provider, dispatch, Night Shift,
+Control Tower, or Google Workspace code touched; classifier-only change.
+
+See `docs/SPRINT_5G2.md` for the full classification design, precedence
+decision, acceptance-case matrix, and test evidence.

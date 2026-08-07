@@ -27,16 +27,39 @@ class ClassificationResult:
 # ---------------------------------------------------------------------------
 # Keyword sets  (all lowercase)
 # ---------------------------------------------------------------------------
+#
+# Technical vocabulary is split into two tiers (Sprint 5G.2):
+#
+# A. ACTION signals  — explicit technical execution verbs.  Their presence
+#    always means TECHNICAL: nobody says "debug the function" or "perbaiki
+#    fungsi ini" without meaning it.
+#
+# B. DOMAIN terms    — technical nouns (function/fungsi, database, api, ...).
+#    A domain noun on its own is a weak signal: "Jelaskan fungsi database"
+#    is an informational question, not a request to touch a database.  A
+#    domain term still routes to TECHNICAL by default (preserves prior
+#    behaviour for messages like "review the architecture of the backend"),
+#    *unless* the message also carries an explanatory/informational pattern
+#    (see _EXPLANATORY_PATTERNS below), in which case the domain-only match
+#    is suppressed and classification falls through to the remaining
+#    categories / GENERAL.
 
-_TECHNICAL_KEYWORDS: frozenset[str] = frozenset(
+_TECHNICAL_ACTION_KEYWORDS: frozenset[str] = frozenset(
     {
-        "code", "kode", "debug", "error", "bug", "fix", "refactor", "function",
-        "fungsi", "class", "module", "api", "endpoint", "database", "schema",
-        "migration", "test", "tes", "unittest", "pytest", "deploy", "build",
-        "compile", "script", "python", "javascript", "typescript", "sql",
-        "architecture", "arsitektur", "technical", "teknis", "repository",
-        "git", "commit", "merge", "branch", "docker", "server", "backend",
-        "frontend", "html", "css", "json", "yaml", "toml",
+        "fix", "perbaiki", "debug", "implement", "refactor", "deploy",
+        "compile", "test", "tes", "uji", "unittest", "pytest", "migrate",
+        "commit", "merge", "build", "code", "kode", "kodekan", "develop",
+    }
+)
+
+_TECHNICAL_DOMAIN_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "error", "bug", "function", "fungsi", "class", "module", "api",
+        "endpoint", "database", "schema", "migration", "script", "python",
+        "javascript", "typescript", "sql", "architecture", "arsitektur",
+        "technical", "teknis", "repository", "git", "branch", "docker",
+        "server", "backend", "frontend", "html", "css", "json", "yaml",
+        "toml",
     }
 )
 
@@ -83,6 +106,28 @@ _FAST_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^\s*\S+\s*\??\s*$"),   # single-word messages only
 ]
 
+# Informational/explanatory intent markers.  When one of these is present
+# alongside only a *weak* single-keyword domain/topic match (technical
+# domain noun, or a lone strategy noun), the weak match is not strong
+# enough evidence of an execution/strategy request and is suppressed in
+# favour of GENERAL.  Concrete multi-word operations (Google Workspace,
+# Presentation, Academic phrase/keyword matches) are unaffected — those
+# remain genuine domain signals even in an explanatory sentence.
+_EXPLANATORY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bjelaskan\b", re.IGNORECASE),
+    re.compile(r"\bapa itu\b", re.IGNORECASE),
+    re.compile(r"\bapa fungsi\b", re.IGNORECASE),
+    re.compile(r"\bbagaimana cara kerja\b", re.IGNORECASE),
+    re.compile(r"\bexplain\b", re.IGNORECASE),
+    re.compile(r"\bwhat is\b", re.IGNORECASE),
+    re.compile(r"\bwhat does\b", re.IGNORECASE),
+    re.compile(r"\bdescribe\b", re.IGNORECASE),
+]
+
+
+def _is_explanatory(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _EXPLANATORY_PATTERNS)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -96,12 +141,18 @@ def classify_intent(message: str) -> ClassificationResult:
 
     Priority order (first match wins):
       1. Fast patterns (very short / trivial messages)
-      2. Technical keywords
-      3. Google Workspace keywords
-      4. Academic keywords
+      2. Technical action keywords (explicit execution verbs) → TECHNICAL
+      3. Technical domain keywords → TECHNICAL, unless the message is
+         explanatory/informational AND only a single weak domain keyword
+         matched (see _EXPLANATORY_PATTERNS) — that combination falls
+         through instead.
+      4. Google Workspace keywords
       5. Presentation keywords
-      6. Strategy keywords
-      7. Default → GENERAL
+      6. Academic keywords
+      7. Strategy keywords → STRATEGY, with the same single-weak-keyword +
+         explanatory-pattern fallthrough as step 3.
+      8. Default → GENERAL (informational fallback carries MEDIUM
+         confidence if step 3/7 suppressed a weak match; LOW otherwise).
     """
     if not message or not message.strip():
         return ClassificationResult(
@@ -122,19 +173,33 @@ def classify_intent(message: str) -> ClassificationResult:
             )
 
     tokens = set(re.findall(r"[a-z][a-z0-9_\-]*", text))
+    explanatory = _is_explanatory(text)
+    suppressed_hits: set[str] = set()
 
-    # 2. Technical
-    tech_hits = tokens & _TECHNICAL_KEYWORDS
-    # also check multi-word technical phrases
-    if tech_hits:
-        confidence = "HIGH" if len(tech_hits) >= 2 else "MEDIUM"
+    # 2. Technical — explicit action verbs always win.
+    action_hits = tokens & _TECHNICAL_ACTION_KEYWORDS
+    if action_hits:
+        combined = action_hits | (tokens & _TECHNICAL_DOMAIN_KEYWORDS)
+        confidence = "HIGH" if len(combined) >= 2 else "MEDIUM"
         return ClassificationResult(
             workflow_id="TECHNICAL",
             confidence=confidence,
-            matched_rule=f"technical_keywords:{','.join(sorted(tech_hits)[:3])}",
+            matched_rule=f"technical_action:{','.join(sorted(combined)[:3])}",
         )
 
-    # 3. Google Workspace (multi-word first)
+    # 3. Technical — domain nouns, guarded against informational phrasing.
+    domain_hits = tokens & _TECHNICAL_DOMAIN_KEYWORDS
+    if domain_hits:
+        if not explanatory:
+            confidence = "HIGH" if len(domain_hits) >= 2 else "MEDIUM"
+            return ClassificationResult(
+                workflow_id="TECHNICAL",
+                confidence=confidence,
+                matched_rule=f"technical_domain:{','.join(sorted(domain_hits)[:3])}",
+            )
+        suppressed_hits |= domain_hits
+
+    # 4. Google Workspace (multi-word first)
     gws_hits: list[str] = []
     for phrase in sorted(_GOOGLE_WORKSPACE_KEYWORDS, key=len, reverse=True):
         if phrase in text:
@@ -149,7 +214,7 @@ def classify_intent(message: str) -> ClassificationResult:
             matched_rule=f"google_workspace_keywords:{','.join(gws_hits[:3])}",
         )
 
-    # 4. Presentation (check before Academic so "slide deck for review" → PRESENTATION not ACADEMIC)
+    # 5. Presentation (check before Academic so "slide deck for review" → PRESENTATION not ACADEMIC)
     pres_hits: list[str] = []
     for phrase in sorted(_PRESENTATION_KEYWORDS, key=len, reverse=True):
         if phrase in text:
@@ -164,7 +229,7 @@ def classify_intent(message: str) -> ClassificationResult:
             matched_rule=f"presentation_keywords:{','.join(pres_hits[:3])}",
         )
 
-    # 5. Academic
+    # 6. Academic
     acad_hits = tokens & _ACADEMIC_KEYWORDS
     if acad_hits:
         confidence = "HIGH" if len(acad_hits) >= 2 else "MEDIUM"
@@ -174,17 +239,29 @@ def classify_intent(message: str) -> ClassificationResult:
             matched_rule=f"academic_keywords:{','.join(sorted(acad_hits)[:3])}",
         )
 
-    # 6. Strategy
+    # 7. Strategy — same weak-single-keyword + explanatory guard as step 3.
     strat_hits = tokens & _STRATEGY_KEYWORDS
     if strat_hits:
-        confidence = "HIGH" if len(strat_hits) >= 2 else "MEDIUM"
+        if len(strat_hits) >= 2 or not explanatory:
+            confidence = "HIGH" if len(strat_hits) >= 2 else "MEDIUM"
+            return ClassificationResult(
+                workflow_id="STRATEGY",
+                confidence=confidence,
+                matched_rule=f"strategy_keywords:{','.join(sorted(strat_hits)[:3])}",
+            )
+        suppressed_hits |= strat_hits
+
+    # 8. Default
+    if suppressed_hits:
         return ClassificationResult(
-            workflow_id="STRATEGY",
-            confidence=confidence,
-            matched_rule=f"strategy_keywords:{','.join(sorted(strat_hits)[:3])}",
+            workflow_id=_DEFAULT_WORKFLOW,
+            confidence="MEDIUM",
+            matched_rule=(
+                "informational_override:"
+                f"{','.join(sorted(suppressed_hits)[:3])}"
+            ),
         )
 
-    # 7. Default
     return ClassificationResult(
         workflow_id=_DEFAULT_WORKFLOW,
         confidence="LOW",
