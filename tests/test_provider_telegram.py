@@ -106,6 +106,7 @@ async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     provider.model_priority = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
     provider.allowed_models = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
     provider.combo_priorities = {"generic": ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]}
+    provider.upstream_route_overrides = {}
     provider.last_successful_model = "nova-v1"
     provider.last_fallback_reason = "timeout_error"
 
@@ -124,9 +125,12 @@ async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     assert "https://***" in response
     assert "secret.com" not in response
     assert "CLOSED" in response
-    assert "Most Recent Successful Model: nova-v1" in response
+    assert "Most Recent Successful Alias (internal, not upstream): nova-v1" in response
     assert "Last Fallback Reason: timeout_error" in response
+    # Sprint 5G.1: internal alias and upstream route must be visibly distinct.
+    assert "alias=nova-v1 -> upstream_route=general" in response
+    assert "alias=nova-v1-fallback -> upstream_route=general" in response
     assert "nova-v1, nova-v2-preview, nova-v1-fallback" in response
-    assert "nova-v2-preview: disabled" in response
+    assert "alias=nova-v2-preview -> upstream_route=UNCONFIGURED (excluded from chain): disabled" in response
     assert "Codex: not configured (stub inactive)" in response
     assert "Claude: not configured (stub inactive)" in response

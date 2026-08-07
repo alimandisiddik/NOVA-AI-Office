@@ -50,8 +50,9 @@ class ProviderRepository:
                      workflow_id, role_id, status, prompt_hash, response_size,
                      latency_ms, retry_count, error_category, created_at, completed_at,
                      initial_model_id, final_model_id, attempt_count, fallback_used, fallback_reason,
-                     initial_provider_id, final_provider_id, resolved_model_label)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     initial_provider_id, final_provider_id, resolved_model_label,
+                     initial_upstream_route_id, final_upstream_route_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.request_id,
@@ -77,6 +78,8 @@ class ProviderRepository:
                         record.initial_provider_id,
                         record.final_provider_id,
                         record.resolved_model_label,
+                        record.initial_upstream_route_id,
+                        record.final_upstream_route_id,
                     )
                 )
 
@@ -84,8 +87,8 @@ class ProviderRepository:
                     conn.execute(
                         """
                         INSERT INTO provider_request_attempts
-                        (request_id, attempt_number, model_id, latency_ms, error_category, status, created_at, provider_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (request_id, attempt_number, model_id, latency_ms, error_category, status, created_at, provider_id, upstream_route_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.request_id,
@@ -96,6 +99,7 @@ class ProviderRepository:
                             attempt.status,
                             attempt.created_at,
                             attempt.provider_id,
+                            attempt.upstream_route_id,
                         )
                     )
         except sqlite3.IntegrityError as exc:

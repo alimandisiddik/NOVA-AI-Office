@@ -61,6 +61,16 @@ def _service(repository, adapters) -> ProviderGatewayService:
             "coding": ["nova-v1-coding", "nova-v1-coding-fallback"],
             "review": ["nova-v1-review", "nova-v1-review-fallback"],
         },
+        # Sprint 5G.1: nova-v1-coding-fallback/nova-v1-review-fallback have
+        # no evidenced distinct upstream combo and are unmapped by default
+        # (see registry.py), so tests exercising attempt-accounting
+        # mechanics across the full combo width give them an explicit,
+        # illustrative test-only mapping here rather than relying on a
+        # fabricated production default.
+        upstream_route_overrides={
+            "nova-v1-coding-fallback": "development-secondary-test",
+            "nova-v1-review-fallback": "review-secondary-test",
+        },
     )
 
 
@@ -163,6 +173,12 @@ async def test_max_three_live_attempts_never_reaches_a_fourth_candidate(reposito
         ["nova-v1"],
         ["nova-v1", "codex-direct", "nova-v1-coding", "nova-v1-coding-fallback"],
         combo_priorities={"coding": ["nova-v1-coding", "nova-v1-coding-fallback", "nova-v1"]},
+        # nova-v1-coding-fallback has no evidenced upstream mapping by
+        # default (see registry.py) -- give it one here so this test's
+        # fourth candidate (nova-v1) is real, proving the bound is on live
+        # *attempts*, not incidentally on how many aliases happen to be
+        # mapped.
+        upstream_route_overrides={"nova-v1-coding-fallback": "development-secondary-test"},
     )
 
     with pytest.raises(ConnectionError):
