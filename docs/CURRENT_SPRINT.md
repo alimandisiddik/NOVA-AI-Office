@@ -203,6 +203,45 @@ Root cause: python-telegram-bot v22 `JobQueue.run_repeating` requires an async c
 
 Fix: Changed `_nightshift_tick` to an `async def` function while keeping its logic intact. Adjusted tests in `tests/test_telegram_nightshift.py` to `asyncio.run()` the coroutine manually when testing without a live event loop.
 
+
+## Wave 5.4 — Sprint 5G.4 Safe Telegram Runtime Error Diagnostics
+
+Status: Implementation under review — independently reviewed and corrected;
+not yet merged.
+
+Root cause: the global Telegram error handler swallowed the true exception
+type and details, hiding the real root cause of failing Night Shift tasks
+while discarding all context.
+
+Fix: `handle_error` safely logs `context.error`'s type and a truncated
+(500-char), control-character-neutralized message, while `update` is never
+read or logged. An independent review of the first implementation found and
+corrected several robustness/security defects before this could be marked
+ready:
+
+- the handler could itself raise (crashing the bot's last-resort error path)
+  on a malformed `context` missing `.error` entirely, or on an exception
+  whose own `__str__` raised — now wrapped so `handle_error` never
+  propagates an exception under any input;
+- redaction used three bare-substring keyword checks (`"token"`, `"secret"`,
+  `"key"` via `in`), which both under- and over-matched: it missed
+  Bearer-token/PEM-private-key/password/credential/`KEY=value` shapes
+  entirely, while "key" alone false-positived on ordinary messages like
+  "duplicate primary key". Redaction now reuses the codebase's shared,
+  already-established `SENSITIVE_CONTENT_PATTERN`
+  (`app/security.py`), supplemented with word-boundary `token`/`secret`
+  matching (dropping bare `key`, which the shared pattern already covers
+  more precisely via `api key`/`private key`);
+- newline/control characters in an exception message were not neutralized,
+  allowing attacker- or upstream-controlled content to forge additional
+  fake-looking log lines — now stripped before logging.
+
+See `tests/test_telegram_bot_error.py` (16 tests) for the full edge-case
+matrix: malformed/missing context, missing/None error, unprintable `__str__`,
+bare token/secret, API key, Bearer/PEM shapes, mixed case, no-over-redaction
+of legitimate "primary key" messages, length truncation, control-character
+neutralization, and update-payload non-leakage.
+
 ## Wave 5.2 — Sprint 5G.2 Intent Classification Runtime Fix
 
 Status: Implementation under review / not yet merged.
