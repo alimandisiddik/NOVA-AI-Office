@@ -66,7 +66,8 @@ def test_tick_callback_uses_job_data_not_job_context_and_runs_eligible_jobs(wire
     job = night_shift.enqueue_night_job("draft_summary_prepare", deduplication_key="tick-dedup", job_id="tick-job")
 
     ctx = _FakeContext(_FakeJob({"night_shift": night_shift, "night_worker": worker}))
-    tb._nightshift_tick(ctx)  # must not raise AttributeError
+    import asyncio
+    asyncio.run(tb._nightshift_tick(ctx))  # must not raise AttributeError
 
     after = night_shift.repository.get_job(job.id)
     assert after.status == "draft_saved"
@@ -75,14 +76,16 @@ def test_tick_callback_uses_job_data_not_job_context_and_runs_eligible_jobs(wire
 
 def test_tick_callback_missing_data_fails_safely():
     ctx = _FakeContext(_FakeJob({}))
-    tb._nightshift_tick(ctx)  # must not raise
+    import asyncio
+    asyncio.run(tb._nightshift_tick(ctx))  # must not raise
 
 
 def test_tick_callback_missing_job_fails_safely():
     class NoJobContext:
         job = None
 
-    tb._nightshift_tick(NoJobContext())  # must not raise
+    import asyncio
+    asyncio.run(tb._nightshift_tick(NoJobContext()))  # must not raise
 
 
 def test_tick_callback_isolates_one_bad_job_from_the_rest(wired_worker, monkeypatch):
@@ -99,7 +102,8 @@ def test_tick_callback_isolates_one_bad_job_from_the_rest(wired_worker, monkeypa
 
     monkeypatch.setattr(worker, "execute_via_dispatch", flaky)
     ctx = _FakeContext(_FakeJob({"night_shift": night_shift, "night_worker": worker}))
-    tb._nightshift_tick(ctx)  # must not raise despite the bad job
+    import asyncio
+    asyncio.run(tb._nightshift_tick(ctx))  # must not raise despite the bad job
 
     good_final = night_shift.repository.get_job(good.id)
     assert good_final.status == "draft_saved"
@@ -111,7 +115,8 @@ def test_overlapping_tick_is_skipped_not_run_concurrently(wired_worker):
 
     assert tb._nightshift_tick_lock.acquire(blocking=False)
     try:
-        tb._nightshift_tick(ctx)  # should skip cleanly, not block or raise
+        import asyncio
+        asyncio.run(tb._nightshift_tick(ctx))  # should skip cleanly, not block or raise
     finally:
         tb._nightshift_tick_lock.release()
 
@@ -142,3 +147,7 @@ def test_nightqueue_cancel_argument_parsing_present():
     source = inspect.getsource(tb.nightqueue_command)
     assert '"cancel"' in source
     assert "cancel_job" in source
+
+def test_nightshift_tick_is_coroutine():
+    import asyncio
+    assert asyncio.iscoroutinefunction(tb._nightshift_tick)

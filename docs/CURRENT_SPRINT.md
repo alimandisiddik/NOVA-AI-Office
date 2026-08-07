@@ -195,6 +195,14 @@ now rejects a base URL ending in `/v1` at startup.
 See `docs/SPRINT_5G1.md` for the full architecture decision, file-level
 change list, and test evidence.
 
+## Wave 5.3 — Sprint 5G.3 Night Shift PTB JobQueue Runtime Fix
+
+Status: Implemented locally. Ready for testing.
+
+Root cause: python-telegram-bot v22 `JobQueue.run_repeating` requires an async coroutine function, but `_nightshift_tick` was registered as a synchronous function.
+
+Fix: Changed `_nightshift_tick` to an `async def` function while keeping its logic intact. Adjusted tests in `tests/test_telegram_nightshift.py` to `asyncio.run()` the coroutine manually when testing without a live event loop.
+
 ## Wave 5.2 — Sprint 5G.2 Intent Classification Runtime Fix
 
 Status: Implementation under review / not yet merged.
