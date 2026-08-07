@@ -22,4 +22,13 @@ This document is the authoritative index for NOVA agent roles. It is intentional
 
 ## Active agents
 
-None. Sprint 1.1 establishes the registry before any agent implementation or activation.
+| Agent ID | Display name | Category | Capabilities |
+|---|---|---|---|
+| `document_agent` | Document Agent | `document` | `read_only`, `draft_only` |
+| `presentation_agent` | Presentation Agent | `presentation` | `read_only`, `draft_only` |
+| `procurement_agent` | Procurement Agent | `procurement` | `read_only`, `draft_only`, `external_communication` |
+| `policy_agent` | Policy Agent | `policy` | `read_only`, `draft_only`, `publication` |
+| `academic_agent` | Academic Agent | `academic` | `read_only`, `draft_only` |
+| `development_agent` | Development Agent | `development` | `read_only`, `draft_only` |
+| `workspace_agent` | Workspace Agent | `workspace`, `administrative`, `personal_planning` | `read_only`, `draft_only` |
+| `night_shift_agent` | Night Shift Agent | `night_shift` | `read_only`, `draft_only` |

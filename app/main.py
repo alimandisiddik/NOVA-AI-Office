@@ -12,6 +12,11 @@ from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryServi
 from app.execution.service import ExecutionService
 from app.nightshift import NightShiftService
 from app.control_tower.service import ControlTowerService
+
+from app.dispatch.registry import AgentRegistry
+from app.dispatch.approvals import ApprovalService
+from app.dispatch.service import DispatchService
+
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
 from app.providers.ninerouter import NineRouterAdapter
 from app.providers.repository import ProviderRepository
@@ -92,10 +97,26 @@ def main() -> int:
         return 1
 
 
+    registry_svc = AgentRegistry()
+    approval_svc = ApprovalService(MemoryDatabase(settings.nova_memory_db_path), authorized_user_id=settings.telegram_allowed_user_id)
+    try:
+        approval_svc.initialize()
+    except MemoryDatabaseError:
+        logger.error("Approval Service schema initialization failed.")
+        return 1
+
+    dispatch_svc = DispatchService(MemoryDatabase(settings.nova_memory_db_path), registry=registry_svc, approvals=approval_svc)
+    try:
+        dispatch_svc.initialize()
+    except MemoryDatabaseError:
+        logger.error("Dispatch Service schema initialization failed.")
+        return 1
+
     control_tower = ControlTowerService(
         MemoryDatabase(settings.nova_memory_db_path),
         execution=execution_svc,
         night_shift=night_shift,
+        approvals=approval_svc,
     )
     try:
         control_tower.initialize()
@@ -121,7 +142,7 @@ def main() -> int:
             logger.error("Provider Gateway initialization failed; continuing without it.")
             provider_svc = None
 
-    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower)
+    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc)
     application.run_polling()
     return 0
 
