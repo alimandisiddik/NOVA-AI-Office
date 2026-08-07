@@ -31,6 +31,10 @@ class NineRouterAdapter:
         # Allow injecting mocked transport for tests
         self._transport = transport
 
+    def is_available(self) -> bool:
+        """NineRouter is considered available if it has configuration."""
+        return bool(self.base_url and self.api_key)
+
     async def generate_text(
         self,
         request: ProviderRequest,

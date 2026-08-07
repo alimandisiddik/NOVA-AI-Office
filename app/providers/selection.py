@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from dataclasses import dataclass
+
 from app.providers.registry import get_registered_model
+
+
+@dataclass(frozen=True)
+class ProviderCandidate:
+    provider_id: str
+    model_id: str
 
 
 def select_eligible_models(
@@ -48,3 +56,42 @@ def select_eligible_models(
         selected.append(model_id)
 
     return selected
+
+
+def select_provider_chain(
+    workflow_id: str,
+    role_id: str,
+    *,
+    combo_priorities: dict[str, list[str]],
+    allowed_models: list[str],
+    configured_specialists: frozenset[str],
+) -> list[ProviderCandidate]:
+    """Resolve the deterministic cross-provider chain for one classified task."""
+    if workflow_id == "TECHNICAL" and role_id == "EXECUTION_WORKER":
+        groups = (["codex-direct"] if "Codex" in configured_specialists else []) + ["coding_or_generic"]
+    elif workflow_id == "TECHNICAL" and role_id == "TECHNICAL_ARCHITECT":
+        groups = (["claude-direct"] if "Claude" in configured_specialists else []) + ["review_or_generic"]
+    else:
+        groups = ["generic"]
+
+    candidates: list[ProviderCandidate] = []
+    seen: set[str] = set()
+    for group in groups:
+        priority = combo_priorities.get(group, [])
+        if group in {"codex-direct", "claude-direct"}:
+            priority = [group]
+        elif group == "coding_or_generic":
+            priority = combo_priorities.get("coding", combo_priorities.get("generic", []))
+        elif group == "review_or_generic":
+            priority = combo_priorities.get("review", combo_priorities.get("generic", []))
+        for model_id in priority:
+            if model_id in seen or model_id not in allowed_models:
+                continue
+            model = get_registered_model(model_id)
+            if model is None or not model.enabled:
+                continue
+            if workflow_id not in model.supported_workflows or role_id not in model.supported_roles:
+                continue
+            seen.add(model_id)
+            candidates.append(ProviderCandidate(model.provider_id, model_id))
+    return candidates

@@ -31,4 +31,4 @@ def test_list_agents_is_deterministic():
     registry = AgentRegistry()
     agents = registry.list_agents()
     assert [agent.agent_id for agent in agents] == sorted(agent.agent_id for agent in agents)
-    assert len(agents) == 8
+    assert len(agents) == 11

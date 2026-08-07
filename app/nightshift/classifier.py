@@ -13,6 +13,13 @@ REGISTERED_JOBS: dict[str, NightJobClassification] = {
     "execution_status_check": NightJobClassification("execution_status_check", "read_only", APPROVED_OVERNIGHT),
     "draft_summary_prepare": NightJobClassification("draft_summary_prepare", "draft_only", APPROVED_OVERNIGHT),
     "dissertation_review_prepare": NightJobClassification("dissertation_review_prepare", "draft_only", DEFERRED_UNTIL_MORNING),
+    # Sprint 5G: provider-backed overnight jobs. 9Router-combo continuity is
+    # structural here — the Coding/Architecture provider chains only place a
+    # direct specialist first when one is configured, so these run
+    # unattended without ever depending on local Codex/Claude availability.
+    "coding_task_prepare": NightJobClassification("coding_task_prepare", "draft_only", APPROVED_OVERNIGHT),
+    "architecture_review_prepare": NightJobClassification("architecture_review_prepare", "draft_only", APPROVED_OVERNIGHT),
+    "generic_ai_task_prepare": NightJobClassification("generic_ai_task_prepare", "draft_only", APPROVED_OVERNIGHT),
     "essential_service_repeated_failure": NightJobClassification("essential_service_repeated_failure", "read_only", CRITICAL_NOTIFY_ONLY),
     "git_commit": NightJobClassification("git_commit", "git_mutation", PROHIBITED),
     "git_push": NightJobClassification("git_push", "git_mutation", PROHIBITED),

@@ -43,4 +43,9 @@ MIGRATIONS = (
     "ALTER TABLE provider_request_audit ADD COLUMN fallback_reason TEXT;",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_attempts_request_number "
     "ON provider_request_attempts(request_id, attempt_number);",
+    # 5G migrations
+    "ALTER TABLE provider_request_attempts ADD COLUMN provider_id TEXT NOT NULL DEFAULT '9Router';",
+    "ALTER TABLE provider_request_audit ADD COLUMN initial_provider_id TEXT;",
+    "ALTER TABLE provider_request_audit ADD COLUMN final_provider_id TEXT;",
+    "ALTER TABLE provider_request_audit ADD COLUMN resolved_model_label TEXT;",
 )

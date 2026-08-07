@@ -25,6 +25,10 @@ AGENT_REGISTRY: dict[str, RegisteredAgent] = {
     "development_agent": RegisteredAgent("development_agent", "Development Agent", "development", frozenset({"read_only", "draft_only"}), "local_deterministic"),
     "workspace_agent": RegisteredAgent("workspace_agent", "Workspace Agent", "workspace", frozenset({"read_only", "draft_only"}), "local_deterministic"),
     "night_shift_agent": RegisteredAgent("night_shift_agent", "Night Shift Agent", "night_shift", frozenset({"read_only", "draft_only"}), "local_deterministic"),
+    # Sprint 5G provider-backed agents
+    "coding_agent": RegisteredAgent("coding_agent", "Coding Agent", "development", frozenset({"read_only", "draft_only"}), "provider_gateway"),
+    "architecture_agent": RegisteredAgent("architecture_agent", "Architecture Agent", "development", frozenset({"read_only", "draft_only"}), "provider_gateway"),
+    "generic_ai_agent": RegisteredAgent("generic_ai_agent", "Generic AI Agent", "general", frozenset({"read_only", "draft_only"}), "provider_gateway"),
 }
 
 

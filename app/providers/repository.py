@@ -49,8 +49,9 @@ class ProviderRepository:
                     (request_id, execution_id, user_id, provider_id, model_id,
                      workflow_id, role_id, status, prompt_hash, response_size,
                      latency_ms, retry_count, error_category, created_at, completed_at,
-                     initial_model_id, final_model_id, attempt_count, fallback_used, fallback_reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     initial_model_id, final_model_id, attempt_count, fallback_used, fallback_reason,
+                     initial_provider_id, final_provider_id, resolved_model_label)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.request_id,
@@ -73,6 +74,9 @@ class ProviderRepository:
                         record.attempt_count,
                         record.fallback_used,
                         record.fallback_reason,
+                        record.initial_provider_id,
+                        record.final_provider_id,
+                        record.resolved_model_label,
                     )
                 )
 
@@ -80,8 +84,8 @@ class ProviderRepository:
                     conn.execute(
                         """
                         INSERT INTO provider_request_attempts
-                        (request_id, attempt_number, model_id, latency_ms, error_category, status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (request_id, attempt_number, model_id, latency_ms, error_category, status, created_at, provider_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.request_id,
@@ -90,7 +94,8 @@ class ProviderRepository:
                             attempt.latency_ms,
                             attempt.error_category,
                             attempt.status,
-                            attempt.created_at
+                            attempt.created_at,
+                            attempt.provider_id,
                         )
                     )
         except sqlite3.IntegrityError as exc:

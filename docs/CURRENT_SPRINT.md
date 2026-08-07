@@ -114,3 +114,30 @@ Key outcomes:
 - sourced and bounded academic evidence with additive SQLite migrations;
 - Control Tower references for academic work items and decisions;
 - read-only `/dissertation` Telegram workspace views.
+
+## Wave 5 — Sprint 5G Multi-Provider Fallback Hardening
+
+Status: Implementation under review / not yet merged
+
+Key outcomes:
+
+- `ProviderGatewayService` remains the only provider execution entry point.
+- Coding and Architecture resolve deterministic configured-specialist-first
+  chains with opaque 9Router combo aliases as fallbacks; Night Shift and
+  Generic AI stay 9Router-combo-first with no specialist dependency.
+- The provider layer allows at most three live attempts; availability and
+  circuit skips are audited without consuming the live-attempt budget.
+- Provider audits retain route/provider identifiers and response-reported model
+  labels only; prompts, full responses, and credentials are never persisted.
+- Dispatch and Night Shift remain existing seams — no second dispatch/approval
+  system. Google Workspace mutations do not enter the generic provider
+  fallback path.
+
+Known limitation: Codex and Claude adapters are configuration-gated safe
+stubs in this sprint. They execute no local CLI/shell command and always
+report unavailable until a real executable/session is configured, so a
+Coding/Architecture request safely falls back to the corresponding 9Router
+combo today.
+
+Known limitation: the Codex and Claude adapters are configuration-gated safe
+stubs in this sprint and execute no CLI command or arbitrary shell input.

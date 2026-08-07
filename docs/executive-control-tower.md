@@ -28,3 +28,11 @@ state/audit writes.
 Priority is deterministic: user urgency and importance, overdue/proximate
 UTC-normalized deadline, unresolved dependency blockers, and approval waiting
 state. Ties use deadline, creation timestamp, and item ID.
+
+## Provider-backed dispatch (Sprint 5G)
+
+Provider-backed work uses the existing `DispatchService` seam through the
+registered Coding, Architecture, and Generic AI agents. Provider selection and
+fallback live only in `ProviderGatewayService`; the Control Tower gains no
+second router or orchestration path. Google Workspace mutations remain on their
+real Workspace services and their existing approval boundary.

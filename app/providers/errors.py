@@ -56,3 +56,6 @@ class UnsupportedOperationError(ProviderError):
 
 class CircuitOpenError(ProviderError):
     category = "circuit_open"
+
+class ProviderCancelledError(ProviderError):
+    category = "cancelled"
