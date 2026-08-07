@@ -1089,7 +1089,7 @@ async def wake_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 _nightshift_tick_lock = threading.Lock()
 
 
-def _nightshift_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _nightshift_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Scheduler callback for `application.job_queue.run_repeating`.
 
     PTB (>=20) passes custom data via `Job.data`, retrieved here as
