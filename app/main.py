@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
 
 from app.config import ConfigurationError, load_settings
 from app.dissertation.service import DissertationService
@@ -16,10 +17,14 @@ from app.control_tower.service import ControlTowerService
 from app.dispatch.registry import AgentRegistry
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.service import DispatchService
+from app.dispatch.adapters import ProviderGatewayAgentAdapter
 from app.nightshift.worker import NightShiftWorker
 
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
 from app.providers.ninerouter import NineRouterAdapter
+from app.providers.specialists.codex_adapter import CodexAdapter
+from app.providers.specialists.claude_adapter import ClaudeAdapter
+from app.providers.adapter import ProviderAdapter
 from app.providers.repository import ProviderRepository
 from app.providers.service import ProviderGatewayService
 from app.telegram_bot import build_application
@@ -27,8 +32,6 @@ from app.telegram_bot import build_application
 
 def configure_logging() -> None:
     """Configure minimal local operational logging without sensitive payloads."""
-    from pathlib import Path
-
     log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -134,20 +137,32 @@ def main() -> int:
     provider_svc: ProviderGatewayService | None = None
 
     if settings.nova_provider_base_url and settings.nova_provider_api_key:
-        adapter = NineRouterAdapter(settings.nova_provider_base_url, settings.nova_provider_api_key)
+        adapters: dict[str, ProviderAdapter] = {
+            "9Router": NineRouterAdapter(settings.nova_provider_base_url, settings.nova_provider_api_key),
+        }
+        if settings.nova_codex_executable_path:
+            adapters["Codex"] = CodexAdapter(settings.nova_codex_executable_path)
+        if settings.nova_claude_executable_path:
+            adapters["Claude"] = ClaudeAdapter(settings.nova_claude_executable_path)
         provider_svc = ProviderGatewayService(
             ProviderRepository(MemoryDatabase(settings.nova_memory_db_path)),
-            adapter,
+            adapters,
             settings.nova_provider_base_url,
             settings.nova_provider_api_key,
             settings.nova_provider_model_priority,
             settings.nova_provider_allowed_models,
+            combo_priorities={
+                "coding": settings.nova_provider_coding_combo_priority or ["nova-v1-coding", "nova-v1-coding-fallback"],
+                "review": settings.nova_provider_review_combo_priority or ["nova-v1-review", "nova-v1-review-fallback"],
+            },
         )
         try:
             provider_svc.initialize()
+            ProviderGatewayAgentAdapter.set_service_factory(lambda: provider_svc)
         except (MemoryDatabaseError, ProviderConfigurationError):
             logger.error("Provider Gateway initialization failed; continuing without it.")
             provider_svc = None
+            ProviderGatewayAgentAdapter.set_service_factory(lambda: None)
 
     application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc, night_worker, dissertation)
     application.run_polling()

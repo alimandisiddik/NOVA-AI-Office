@@ -645,7 +645,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await effective_message.reply_text("Terjadi kesalahan internal. Coba lagi nanti.")
 
 async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show safe configuration status for the provider gateway."""
+    """Show safe configuration status for the provider gateway chains."""
     if not await _require_authorized_user(update, context):
         return
     effective_message = update.effective_message
@@ -662,27 +662,60 @@ async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_T
     parsed = urlparse(provider.base_url)
     safe_url = f"{parsed.scheme}://***" if parsed.scheme else "***"
 
+    # Sprint 5G: report every configured combo group (not only the generic
+    # chain), plus each specialist adapter's own availability — a stub that
+    # is not configured/available must show as such, never as "active".
     model_lines = []
-    for model_id in provider.model_priority:
-        model = get_registered_model(model_id)
-        enabled = "enabled" if model and model.enabled else "disabled"
-        circuit_state = provider.circuit_breaker.get_state(model_id).upper()
-        model_lines.append(f"  - {model_id}: {enabled}; circuit={circuit_state}")
+    seen_model_ids: set[str] = set()
+    for group_name, group_priority in provider.combo_priorities.items():
+        for model_id in group_priority:
+            if model_id in seen_model_ids:
+                continue
+            seen_model_ids.add(model_id)
+            model = get_registered_model(model_id)
+            enabled = "enabled" if model and model.enabled else "disabled"
+            provider_id = model.provider_id if model else "9Router"
+            circuit_state = provider.circuit_breaker.get_state(f"{provider_id}:{model_id}").upper()
+            try:
+                adapter = provider._get_adapter(provider_id)
+                available = "available" if adapter is not None and adapter.is_available() else "unavailable"
+            except Exception:
+                available = "unknown"
+            model_lines.append(
+                f"  - [{group_name}] {model_id}: {enabled}; provider={provider_id}; "
+                f"availability={available}; circuit={circuit_state}"
+            )
+
+    specialist_lines = []
+    for provider_id in ("Codex", "Claude"):
+        adapter = provider._get_adapter(provider_id)
+        if adapter is None:
+            specialist_lines.append(f"  - {provider_id}: not configured (stub inactive)")
+            continue
+        try:
+            available = "available" if adapter.is_available() else "unavailable (stub)"
+        except Exception:
+            available = "unknown"
+        specialist_lines.append(f"  - {provider_id}: {available}")
 
     recent_success = provider.last_successful_model or "none"
     fallback_reason = provider.last_fallback_reason or "none"
     lines = [
-        "🌐 Provider Gateway Status",
+        "🌐 Provider Gateway Chain Status",
         "",
         f"URL: {safe_url}",
-        f"Model Priority: {', '.join(provider.model_priority)}",
-        "Models:",
+        f"Generic Chain (Priority): {', '.join(provider.model_priority)}",
+        "Registered Routes (internal alias only — never a real model identity):",
     ] + model_lines + [
+        "",
+        "Direct Specialist Adapters (safe stubs until configured):",
+    ] + specialist_lines + [
         "",
         f"Most Recent Successful Model: {recent_success}",
         f"Last Fallback Reason: {fallback_reason}",
     ]
     await effective_message.reply_text("\n".join(lines))
+
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Record a generic failure without leaking update data, credentials, or tokens."""

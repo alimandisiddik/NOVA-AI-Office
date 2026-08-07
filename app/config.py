@@ -28,6 +28,11 @@ class Settings:
     nova_provider_default_model: str = ""
     nova_provider_allowed_models: list[str] = None
 
+    nova_codex_executable_path: str = ""
+    nova_claude_executable_path: str = ""
+    nova_provider_coding_combo_priority: list[str] = None
+    nova_provider_review_combo_priority: list[str] = None
+
     # Google Workspace Settings (Optional at startup)
     google_client_secrets_path: Path | None = None
     google_token_storage_path: Path | None = None
@@ -79,6 +84,11 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
     allowed_list = [m.strip() for m in provider_allowed.split(",") if m.strip()] if provider_allowed else []
     priority_list = [m.strip() for m in provider_priority.split(",") if m.strip()] if provider_priority else []
 
+    codex_path = environment.get("NOVA_CODEX_EXECUTABLE_PATH", "").strip()
+    claude_path = environment.get("NOVA_CLAUDE_EXECUTABLE_PATH", "").strip()
+    coding_priority = environment.get("NOVA_PROVIDER_CODING_COMBO_PRIORITY", "").strip()
+    review_priority = environment.get("NOVA_PROVIDER_REVIEW_COMBO_PRIORITY", "").strip()
+
     # Google Workspace Config
     google_secrets = environment.get("GOOGLE_CLIENT_SECRETS_PATH", "").strip()
     google_token = environment.get("GOOGLE_TOKEN_STORAGE_PATH", "").strip()
@@ -106,6 +116,10 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         nova_provider_model_priority=priority_list if priority_list else ([],) [0],
         nova_provider_default_model=provider_default,
         nova_provider_allowed_models=allowed_list if allowed_list else ([],) [0],
+        nova_codex_executable_path=codex_path,
+        nova_claude_executable_path=claude_path,
+        nova_provider_coding_combo_priority=[item.strip() for item in coding_priority.split(",") if item.strip()],
+        nova_provider_review_combo_priority=[item.strip() for item in review_priority.split(",") if item.strip()],
         google_client_secrets_path=Path(google_secrets) if google_secrets else None,
         google_token_storage_path=Path(google_token) if google_token else None,
         google_oauth_port=google_port,

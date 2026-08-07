@@ -27,6 +27,24 @@ _CORE_WORKFLOWS = frozenset(
 
 _MODELS = (
     RegisteredModel(
+        model_id="codex-direct",
+        provider_id="Codex",
+        supported_roles=frozenset({"EXECUTION_WORKER"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=1,
+        enabled=True,
+        fallback_group="coding_direct",
+    ),
+    RegisteredModel(
+        model_id="claude-direct",
+        provider_id="Claude",
+        supported_roles=frozenset({"TECHNICAL_ARCHITECT"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=1,
+        enabled=True,
+        fallback_group="review_direct",
+    ),
+    RegisteredModel(
         model_id="nova-v1",
         provider_id="9Router",
         supported_roles=_CORE_ROLES,
@@ -70,6 +88,42 @@ _MODELS = (
         priority=50,
         enabled=True,
         fallback_group="isolated",
+    ),
+    RegisteredModel(
+        model_id="nova-v1-coding",
+        provider_id="9Router",
+        supported_roles=frozenset({"EXECUTION_WORKER"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=10,
+        enabled=True,
+        fallback_group="coding_combo",
+    ),
+    RegisteredModel(
+        model_id="nova-v1-coding-fallback",
+        provider_id="9Router",
+        supported_roles=frozenset({"EXECUTION_WORKER"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=20,
+        enabled=True,
+        fallback_group="coding_combo",
+    ),
+    RegisteredModel(
+        model_id="nova-v1-review",
+        provider_id="9Router",
+        supported_roles=frozenset({"TECHNICAL_ARCHITECT"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=10,
+        enabled=True,
+        fallback_group="review_combo",
+    ),
+    RegisteredModel(
+        model_id="nova-v1-review-fallback",
+        provider_id="9Router",
+        supported_roles=frozenset({"TECHNICAL_ARCHITECT"}),
+        supported_workflows=frozenset({"TECHNICAL"}),
+        priority=20,
+        enabled=True,
+        fallback_group="review_combo",
     ),
 )
 

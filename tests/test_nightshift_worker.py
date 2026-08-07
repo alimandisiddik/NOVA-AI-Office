@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.dispatch.adapters import ProviderGatewayAgentAdapter
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.errors import DispatchUnavailableError, UnsupportedCapabilityError
 from app.dispatch.registry import AgentRegistry
@@ -21,6 +22,9 @@ from app.nightshift.worker import (
     UnknownJobRouteError,
     _JOB_TYPE_ROUTES,
 )
+from app.providers.models import ProviderRequest, ProviderResponse
+from app.providers.repository import ProviderRepository
+from app.providers.service import ProviderGatewayService
 
 
 @pytest.fixture
@@ -263,6 +267,65 @@ def test_execute_via_dispatch_success_advances_to_draft_saved_not_completed(work
     assert final.dispatch_id is not None
     assert dispatch_service.get_dispatch(final.dispatch_id).status == "succeeded"
     assert final.lease_worker_id is None
+
+
+# -- Sprint 5G: provider-gateway continuity, real stack end-to-end -----------
+
+
+class _ScriptedNineRouterAdapter:
+    """Fakes only the raw HTTP/adapter boundary, never NOVA's own services --
+    NightShiftService, DispatchService, ApprovalService, AgentRegistry, and
+    ProviderGatewayService are all the real classes below."""
+
+    def __init__(self, result: str) -> None:
+        self._result = result
+        self.calls: list[str] = []
+
+    def is_available(self) -> bool:
+        return True
+
+    async def generate_text(self, request: ProviderRequest, *, timeout_seconds: float) -> ProviderResponse:
+        del timeout_seconds
+        self.calls.append(request.model_id)
+        return ProviderResponse(request.request_id, self._result, f"resolved-{request.model_id}")
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_gateway_agent_adapter():
+    yield
+    ProviderGatewayAgentAdapter.set_service_factory(lambda: None)
+
+
+def test_night_shift_reaches_draft_saved_via_9router_with_no_specialist_configured(db, worker, repo, service, dispatch_service):
+    """E: Night/Background continuity is structural, not conditional -- a
+    provider-backed overnight job must succeed through 9Router alone with
+    zero Codex/Claude adapters configured anywhere, and none of
+    NightShiftWorker's claim/execute/lease logic needs to know that."""
+    provider_repository = ProviderRepository(db)
+    provider_repository.initialize()
+    router_adapter = _ScriptedNineRouterAdapter("overnight coding draft")
+    provider_service = ProviderGatewayService(
+        provider_repository,
+        {"9Router": router_adapter},  # deliberately no "Codex" adapter registered
+        "https://api.example.test",
+        "test-key",
+        ["nova-v1"],
+        ["nova-v1", "nova-v1-coding", "nova-v1-coding-fallback"],
+        combo_priorities={"coding": ["nova-v1-coding", "nova-v1-coding-fallback"]},
+    )
+    provider_service.initialize()
+    ProviderGatewayAgentAdapter.set_service_factory(lambda: provider_service)
+
+    repo.set_mode("night_shift", True, "test", "test", _utc_now())
+    job = service.enqueue_night_job("coding_task_prepare", deduplication_key="dedup-5g", job_id="job_5g")
+    claimed = worker.claim_job(job)
+    worker.execute_via_dispatch(claimed)
+
+    final = repo.get_job(job.id)
+    assert final.status == "draft_saved"
+    assert final.dispatch_id is not None
+    assert dispatch_service.get_dispatch(final.dispatch_id).status == "succeeded"
+    assert router_adapter.calls == ["nova-v1-coding"]  # 9Router combo was used directly; no specialist involved
 
 
 def test_defer_for_approval_uses_real_request_approval_and_persists_approval_id(worker, repo, service):
@@ -579,7 +642,7 @@ def test_structural_guard_no_fake_dispatch_class():
     assert "class FakeApprovalService" not in src
 
 
-def test_dispatch_module_untouched_by_5f():
-    result = subprocess.run(["git", "diff", "--", "app/dispatch"], capture_output=True, text=True)
+def test_dispatch_public_interface_unchanged_by_5g():
+    result = subprocess.run(["git", "diff", "--", "app/dispatch/service.py", "app/dispatch/schema.py"], capture_output=True, text=True)
     assert result.returncode == 0
     assert result.stdout.strip() == ""

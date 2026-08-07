@@ -105,8 +105,17 @@ async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     provider.circuit_breaker = mock_cb
     provider.model_priority = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
     provider.allowed_models = ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]
+    provider.combo_priorities = {"generic": ["nova-v1", "nova-v2-preview", "nova-v1-fallback"]}
     provider.last_successful_model = "nova-v1"
     provider.last_fallback_reason = "timeout_error"
+
+    ninerouter_adapter = MagicMock()
+    ninerouter_adapter.is_available.return_value = True
+
+    def _get_adapter(provider_id):
+        return ninerouter_adapter if provider_id == "9Router" else None
+
+    provider._get_adapter = MagicMock(side_effect=_get_adapter)
     mock_context.application.bot_data["provider"] = provider
 
     await providerstatus_command(mock_update, mock_context)
@@ -119,3 +128,5 @@ async def test_providerstatus_success_and_redaction(mock_update, mock_context):
     assert "Last Fallback Reason: timeout_error" in response
     assert "nova-v1, nova-v2-preview, nova-v1-fallback" in response
     assert "nova-v2-preview: disabled" in response
+    assert "Codex: not configured (stub inactive)" in response
+    assert "Claude: not configured (stub inactive)" in response

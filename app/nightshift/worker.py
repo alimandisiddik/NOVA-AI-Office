@@ -52,6 +52,9 @@ _JOB_TYPE_ROUTES: dict[str, tuple[str, str]] = {
     "execution_status_check": ("night_shift_agent", "read_only"),
     "draft_summary_prepare": ("night_shift_agent", "draft_only"),
     "dissertation_review_prepare": ("night_shift_agent", "draft_only"),
+    "coding_task_prepare": ("coding_agent", "draft_only"),
+    "architecture_review_prepare": ("architecture_agent", "draft_only"),
+    "generic_ai_task_prepare": ("generic_ai_agent", "draft_only"),
 }
 
 _TERMINAL_JOB_STATUSES = frozenset({"completed", "rejected", "failed_safely"})

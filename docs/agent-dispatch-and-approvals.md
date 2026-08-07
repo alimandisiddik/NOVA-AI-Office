@@ -48,3 +48,11 @@ supplied free text that can be persisted—including payload references,
 approval actions, closure/rejection reasons, result summaries, and metadata—is
 validated against `app.security.SENSITIVE_CONTENT_PATTERN` before writes; key
 and SSH/private-key shaped values are also rejected.
+
+## Provider gateway adapter (Sprint 5G)
+
+`ProviderGatewayAgentAdapter` is an additive adapter for the existing dispatch
+state machine. It returns a sanitized `DispatchResult` after one bounded
+provider-gateway request. The gateway has a separate, auditable three-live-call
+provider budget; unavailable specialists and open circuits are audited as skips
+and do not consume that budget.

@@ -35,6 +35,7 @@ class ProviderRequestAttempt:
     error_category: Optional[str]
     status: str
     created_at: str
+    provider_id: str = "9Router"
 
 
 @dataclass(frozen=True)
@@ -59,3 +60,6 @@ class ProviderAuditRecord:
     attempt_count: int = 1
     fallback_used: int = 0
     fallback_reason: Optional[str] = None
+    initial_provider_id: Optional[str] = None
+    final_provider_id: Optional[str] = None
+    resolved_model_label: Optional[str] = None

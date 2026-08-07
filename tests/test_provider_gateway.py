@@ -209,8 +209,11 @@ async def test_model_circuits_are_independent(repo) -> None:
         with pytest.raises(ConnectionError):
             await service.generate_text("Hello there", AUTHORIZED_USER)
 
-    assert service.circuit_breaker.get_state(MODEL_1) == "open"
-    assert service.circuit_breaker.get_state(MODEL_2) == "closed"
+    # CircuitBreaker keys are provider-qualified ("<provider_id>:<model_id>",
+    # Sprint 5G) so that the same model_id string can never collide across
+    # providers.
+    assert service.circuit_breaker.get_state(f"9Router:{MODEL_1}") == "open"
+    assert service.circuit_breaker.get_state(f"9Router:{MODEL_2}") == "closed"
     with pytest.raises(ConfigurationError, match="No eligible"):
         await service.generate_text("Hello there", AUTHORIZED_USER)
     assert calls == 5
