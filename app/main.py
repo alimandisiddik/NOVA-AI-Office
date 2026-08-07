@@ -76,13 +76,6 @@ def main() -> int:
         logger.error("Workspace Memory initialization failed.")
         return 1
 
-    dissertation = DissertationService(MemoryDatabase(settings.nova_memory_db_path))
-    try:
-        dissertation.initialize()
-    except MemoryDatabaseError:
-        logger.error("Dissertation Workspace initialization failed.")
-        return 1
-
     execution_svc = ExecutionService(MemoryDatabase(settings.nova_memory_db_path), settings.telegram_allowed_user_id)
     try:
         execution_svc.initialize()
@@ -131,6 +124,13 @@ def main() -> int:
         logger.error("Control Tower schema initialization failed.")
         return 1
 
+    dissertation = DissertationService(MemoryDatabase(settings.nova_memory_db_path), control_tower=control_tower)
+    try:
+        dissertation.initialize()
+    except MemoryDatabaseError:
+        logger.error("Dissertation Workspace initialization failed.")
+        return 1
+
     provider_svc: ProviderGatewayService | None = None
 
     if settings.nova_provider_base_url and settings.nova_provider_api_key:
@@ -149,7 +149,7 @@ def main() -> int:
             logger.error("Provider Gateway initialization failed; continuing without it.")
             provider_svc = None
 
-    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc, night_worker)
+    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc, night_worker, dissertation)
     application.run_polling()
     return 0
 

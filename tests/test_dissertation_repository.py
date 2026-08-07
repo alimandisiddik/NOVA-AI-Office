@@ -128,3 +128,104 @@ def test_database_constraints_reject_invalid_status_target_and_duplicate_ordinal
 
     with pytest.raises(InvalidDissertationValueError):
         repository.update_document_version_state(version.id, "approved")
+
+
+def test_workspace_crud(repository: DissertationRepository) -> None:
+    workspace = repository.get_or_create_workspace("My Diss", "CS")
+    assert workspace.title == "My Diss"
+    assert workspace.program == "CS"
+    assert workspace.status == "active"
+
+    updated = repository.update_workspace(status="writing", current_focus="Lit Review")
+    assert updated.status == "writing"
+    assert updated.current_focus == "Lit Review"
+
+    # Idempotent create
+    workspace2 = repository.get_or_create_workspace("Other", "Other")
+    assert workspace2.id == workspace.id
+    assert workspace2.title == "My Diss" # Should not overwrite
+
+def test_source_and_evidence(repository: DissertationRepository) -> None:
+    source = repository.create_source("Book A", "book", "Citation", None)
+    assert source.title == "Book A"
+    assert source.status == "unread"
+
+    updated = repository.update_source_status(source.id, "reviewed")
+    assert updated.status == "reviewed"
+
+    chapter = repository.create_chapter("Ch 1", 1)
+    repository.link_source_to_chapter(source.id, chapter.id)
+    repository.link_source_to_chapter(source.id, chapter.id) # idempotent
+
+    sources = repository.list_sources(chapter_id=chapter.id)
+    assert len(sources) == 1
+    assert sources[0].id == source.id
+
+    evidence = repository.create_evidence(source.id, "Summary", chapter_id=chapter.id, gap_id=None, locator_detail="p. 1")
+    assert evidence.summary == "Summary"
+
+    ev_list = repository.list_evidence(chapter_id=chapter.id)
+    assert len(ev_list) == 1
+
+def test_gap_transitions(repository: DissertationRepository) -> None:
+    gap = repository.create_gap("Missing info", "missing_evidence", chapter_id=None)
+    assert gap.status == "open"
+
+    updated = repository.update_gap_status(gap.id, "in_progress")
+    assert updated.status == "in_progress"
+
+    updated = repository.update_gap_status(gap.id, "resolved", resolution_note="Found it")
+    assert updated.status == "resolved"
+    assert updated.resolution_note == "Found it"
+    assert updated.resolved_at is not None
+
+    import pytest
+    from app.dissertation.repository import InvalidGapTransitionError
+    with pytest.raises(InvalidGapTransitionError):
+        repository.update_gap_status(gap.id, "open") # Terminal
+
+def test_note_creation(repository: DissertationRepository) -> None:
+    chapter = repository.create_chapter("Ch 1", 1)
+    note = repository.create_note("analysis", "My note", chapter_id=chapter.id)
+    assert note.content == "My note"
+
+    import pytest
+    from app.dissertation.repository import InvalidDissertationValueError
+    with pytest.raises(InvalidDissertationValueError):
+        repository.create_note("analysis", "No relations")
+
+def test_links_and_audit(repository: DissertationRepository) -> None:
+    link = repository.create_research_task_link("wi_123", chapter_id=None, gap_id=None)
+    assert link.work_item_id == "wi_123"
+
+    d_link = repository.create_decision_link("dec_123", chapter_id=None)
+    assert d_link.decision_id == "dec_123"
+
+    repository.audit("source", 1, "created", "user1")
+
+def test_fk_validations(repository: DissertationRepository) -> None:
+    from app.dissertation.repository import DissertationTargetNotFoundError
+    import pytest
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Source not found"):
+        repository.create_evidence(999, "Summary", chapter_id=None, gap_id=None, locator_detail=None)
+
+    source = repository.create_source("Source A", "book", "Citation", None)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Chapter not found"):
+        repository.create_evidence(source.id, "Summary", chapter_id=999, gap_id=None, locator_detail=None)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Gap not found"):
+        repository.create_evidence(source.id, "Summary", chapter_id=None, gap_id=999, locator_detail=None)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Chapter not found"):
+        repository.create_note("analysis", "Content", chapter_id=999)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Source not found"):
+        repository.create_note("analysis", "Content", source_id=999)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Evidence not found"):
+        repository.create_note("analysis", "Content", evidence_id=999)
+
+    with pytest.raises(DissertationTargetNotFoundError, match="Gap not found"):
+        repository.create_note("analysis", "Content", gap_id=999)

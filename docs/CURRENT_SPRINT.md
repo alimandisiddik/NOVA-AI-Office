@@ -82,21 +82,19 @@ mutations.
 - Sprint 5D — Google Calendar Integration
 - Sprint 5E — Google Drive Read-Only
 
-## Wave 3 — In Implementation Review
+## Wave 3 — Completed
 
-- Sprint 5B.1 — Agent Dispatch & Approval Operations — implemented locally
-  on `sprint/5b1-agent-dispatch-approval`; cooperative review in progress,
-  not yet merged — see `docs/WAVE_3_INTEGRATION_CONTRACT.md` and
-  `docs/SPRINT_5B1.md`. Delivered: canonical `DispatchService`/
-  `ApprovalService`, static `AgentRegistry` (eight agents), additive
-  `dispatches`/`dispatch_attempts`/`approvals`/`approval_audit`/
-  `dispatch_audit_log`/`dispatch_leases` schema, and Control Tower's
-  `list_approvals()` extended with the dispatch/approval source.
-- Sprint 5F — Full Night Shift Automation — implementation under review on
-  `sprint/5f-full-night-shift`, rebased onto merged 5B.1 (`8c6f64a`);
-  cooperative review in progress, not yet merged — see `docs/SPRINT_5F.md`.
-  Delivered: `NightShiftWorker` (claim/execute/defer/recover/cancel) driven
-  by `application.job_queue.run_repeating(...)`, consuming the real merged
+- Sprint 5B.1 — Agent Dispatch & Approval Operations — merged at `8c6f64a`
+  — see `docs/WAVE_3_INTEGRATION_CONTRACT.md` and `docs/SPRINT_5B1.md`.
+  Delivered: canonical `DispatchService`/`ApprovalService`, static
+  `AgentRegistry` (eight agents), additive `dispatches`/`dispatch_attempts`/
+  `approvals`/`approval_audit`/`dispatch_audit_log`/`dispatch_leases`
+  schema, and Control Tower's `list_approvals()` extended with the
+  dispatch/approval source.
+- Sprint 5F — Full Night Shift Automation — merged at `749fa21`, rebased
+  onto merged 5B.1 (`8c6f64a`) — see `docs/SPRINT_5F.md`. Delivered:
+  `NightShiftWorker` (claim/execute/defer/recover/cancel) driven by
+  `application.job_queue.run_repeating(...)`, consuming the real merged
   `app/dispatch/` with no local stand-in; every status change routes
   through `NightShiftService.transition_night_job()` and `JOB_TRANSITIONS`
   is unmodified from `main`; additive `night_queue_jobs` lease/dispatch/
@@ -104,3 +102,15 @@ mutations.
   `/nightshift`, `/nightstatus`, `/nightqueue` (with `cancel <job_id>`),
   `/wake`. Known limitation: approval-free automated completions rest at
   `draft_saved`, not `completed` — see `docs/SPRINT_5F.md`.
+
+## Wave 4 — Sprint 6A Full Dissertation Workspace
+
+Status: Implementation under review / not yet merged
+
+Key outcomes:
+
+- singleton dissertation workspace with chapter focus tracking;
+- source, evidence, research-note, gap, audit, and linkage persistence;
+- sourced and bounded academic evidence with additive SQLite migrations;
+- Control Tower references for academic work items and decisions;
+- read-only `/dissertation` Telegram workspace views.
