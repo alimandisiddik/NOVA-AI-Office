@@ -52,3 +52,33 @@ version metadata and maps.
 Sprint 6A.1 can add a Telegram interface over `DissertationService`. Later
 sprints can record Drive-import metadata, retain documents under an approved
 storage policy, or attach actual review execution to `ReviewJob` records.
+
+## Sprint 6A full workspace
+
+Sprint 6A adds a singleton `DissertationWorkspace` root plus linked source,
+evidence, research-note, gap, Control Tower work-item, and Control Tower
+decision records. Sources retain metadata and citation text only; evidence is
+always sourced and bounded to a short finding, while research notes must link
+to at least one academic object.
+
+Workspace and chapter focus are manually set narrative fields. Overall
+progress is computed from the simple mean of chapter-level progress and is
+never stored. The next action is also computed: active academic work items,
+then pending academic work items, then an in-progress gap with a next action,
+then an open gap, and finally drafting/review guidance.
+
+Research tasks and decisions are not duplicated. `DissertationService` creates
+Control Tower `academic` work items and Control Tower decisions, persisting only
+local linkage metadata. The Telegram `/dissertation` command is read-only and
+provides overview, chapter, gaps, next-action, task, evidence, source, and
+decision views. Write commands remain deferred.
+
+Progress uses the fixed status weights `draft=0`, `in_review=50`,
+`revised=75`, and `final=100`. A chapter uses its subchapter mean when it has
+subchapters; otherwise it uses its own status weight. The workspace uses the
+unweighted mean of chapter progress, or `0` when there are no chapters.
+
+Next action uses this ordered cascade: critical open gap, pending linked
+academic Control Tower item, any open gap, the first non-final chapter, all
+chapters final, then no chapters defined. Gaps and tasks remain separate
+signals and are not folded into progress.

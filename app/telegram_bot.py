@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 from app.config import Settings
+from app.dissertation.service import DissertationService
 from app.memory.database import MemoryDatabaseError
 from app.memory.formatters import (
     continue_message,
@@ -101,6 +102,7 @@ HELP_MESSAGE: Final = (
     "/runapprove <id> — setujui execution\n"
     "/runstatus <id> — cek status execution\n"
     "/cancelrun <id> — batalkan execution\n"
+    "/dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]\n"
     "Anda juga dapat memakai bahasa natural sederhana."
 )
 STATUS_MESSAGE: Final = (
@@ -693,6 +695,10 @@ def _control_tower(context: ContextTypes.DEFAULT_TYPE) -> ControlTowerService | 
     service = context.application.bot_data.get("control_tower")
     return service if isinstance(service, ControlTowerService) else None
 
+def _dissertation(context: ContextTypes.DEFAULT_TYPE) -> DissertationService | None:
+    service = context.application.bot_data.get("dissertation")
+    return service if isinstance(service, DissertationService) else None
+
 def _dispatch_svc(context: ContextTypes.DEFAULT_TYPE) -> DispatchService:
     svc = context.application.bot_data.get("dispatch_svc")
     if svc is None:
@@ -1078,6 +1084,85 @@ def _nightshift_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
         _nightshift_tick_lock.release()
 
 
+
+async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Render read-only dissertation workspace views."""
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _dissertation(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Dissertation Workspace is temporarily unavailable.")
+        return
+
+    args = context.args
+    view = args[0] if args else "overview"
+    try:
+        if view == "overview":
+            overview = service.get_overview()
+            lines = [
+                f"Dissertation: {overview.workspace.title}",
+                f"Status: {overview.workspace.status}",
+                f"Progress: {overview.overall_progress:.0f}%",
+                f"Focus: {overview.current_focus or '-'}",
+                f"Chapters: {len(overview.chapters)} | Sources: {overview.total_sources} | Evidence: {overview.total_evidence}",
+                f"Open gaps: {overview.open_gaps} | Pending tasks: {overview.pending_tasks}",
+                f"Next: {overview.next_action}",
+            ]
+        elif view == "chapter" and len(args) == 2:
+            order_index = int(args[1])
+            chapter = next((item for item in service.list_chapters() if item.order_index == order_index), None)
+            if chapter is None:
+                raise ValueError("Chapter not found")
+            detail = service.get_chapter_detail(chapter.id)
+            lines = [
+                f"Chapter {chapter.order_index}: {chapter.title}",
+                f"Status: {chapter.status} | Progress: {detail.progress:.0f}%",
+                f"Focus: {chapter.current_focus or '-'}",
+                f"Sources: {len(detail.sources)} | Evidence: {len(detail.evidence)} | Open gaps: {detail.open_gaps}",
+                f"Pending tasks: {detail.pending_tasks}",
+                f"Next: {detail.next_action}",
+            ]
+        elif view == "gaps":
+            gaps = [gap for gap in service.list_gaps() if gap.status != "resolved"]
+            lines = ["Open dissertation gaps:"] + ([f"• {gap.description} — {gap.status}" for gap in gaps] or ["• None."])
+        elif view == "next":
+            lines = [f"Next academic action: {service.get_next_action()}"]
+        elif view == "tasks":
+            tasks = service.list_research_tasks()
+            lines = ["Academic tasks:"] + ([f"• {item['work_item'].title} — {item['work_item'].status}" for item in tasks] or ["• None."])
+        elif view == "evidence" and len(args) == 2:
+            order_index = int(args[1])
+            chapter = next((item for item in service.list_chapters() if item.order_index == order_index), None)
+            if chapter is None:
+                raise ValueError("Chapter not found")
+            evidence = service.list_evidence(chapter_id=chapter.id)
+            lines = [f"Evidence for chapter {order_index}:"] + ([f"• {item.summary}" for item in evidence] or ["• None."])
+        elif view == "sources" and len(args) in {1, 2}:
+            chapter_id = None
+            if len(args) == 2:
+                order_index = int(args[1])
+                chapter = next((item for item in service.list_chapters() if item.order_index == order_index), None)
+                if chapter is None:
+                    raise ValueError("Chapter not found")
+                chapter_id = chapter.id
+            sources = service.list_sources(chapter_id=chapter_id)
+            lines = ["Dissertation sources:"] + ([f"• {item.title} — {item.status}" for item in sources] or ["• None."])
+        elif view == "decisions":
+            decisions = service.list_decisions()
+            lines = ["Dissertation decisions:"] + ([f"• {item['decision'].summary}" for item in decisions] or ["• None."])
+        else:
+            lines = ["Usage: /dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]"]
+    except (ValueError, TypeError):
+        lines = ["Invalid dissertation view or chapter number."]
+    except Exception:
+        LOGGER.exception("Dissertation handler failed")
+        lines = ["Dissertation Workspace is temporarily unavailable."]
+    await message.reply_text(_bounded_message(lines))
+
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
@@ -1088,6 +1173,7 @@ def build_application(
     dispatch: DispatchService | None = None,
     approvals: ApprovalService | None = None,
     night_worker: NightShiftWorker | None = None,
+    dissertation: DissertationService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1096,6 +1182,7 @@ def build_application(
     application.bot_data["execution"] = execution
     application.bot_data["night_shift"] = night_shift
     application.bot_data["control_tower"] = control_tower
+    application.bot_data["dissertation"] = dissertation
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1139,6 +1226,7 @@ def build_application(
     application.add_handler(CommandHandler("nightstatus", nightstatus_command))
     application.add_handler(CommandHandler("nightqueue", nightqueue_command))
     application.add_handler(CommandHandler("wake", wake_command))
+    application.add_handler(CommandHandler("dissertation", dissertation_handler))
 
 
     if dispatch is not None:

@@ -173,3 +173,36 @@ def test_migration_preserves_legacy_rows_with_deterministic_default_and_stays_id
         "delete_chapter_versions_before_chapter",
         "delete_subchapter_versions_before_subchapter",
     ]
+
+
+def test_initialize_adds_sprint_6a_tables_and_columns(tmp_path: Path) -> None:
+    database = MemoryDatabase(tmp_path / "workspace.db")
+    database.initialize()
+    service = DissertationService(database)
+    service.initialize()
+
+    with database.connection() as connection:
+        tables = {
+            row["name"]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+
+        chapter_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(dissertation_chapters)").fetchall()
+        }
+
+    expected_tables = {
+        "dissertation_workspace",
+        "dissertation_sources",
+        "dissertation_source_chapter_links",
+        "dissertation_evidence",
+        "dissertation_notes",
+        "dissertation_gaps",
+        "dissertation_research_task_links",
+        "dissertation_decision_links",
+        "dissertation_research_audit_log"
+    }
+
+    assert expected_tables.issubset(tables)
+    assert "current_focus" in chapter_columns
