@@ -50,12 +50,13 @@ ROUTES = {
 
 
 class ControlTowerService:
-    def __init__(self, database: MemoryDatabase, *, execution: ExecutionService | None = None,
-                 night_shift: NightShiftService | None = None) -> None:
+    def __init__(self, database: MemoryDatabase, *, execution: 'ExecutionService | None' = None,
+                 night_shift: 'NightShiftService | None' = None, approvals: 'ApprovalService | None' = None) -> None:
         self.database = database
         self.repository = ControlTowerRepository(database)
         self.execution = execution
         self.night_shift = night_shift
+        self.approvals = approvals
 
     def initialize(self) -> None:
         try:
@@ -233,6 +234,12 @@ class ControlTowerService:
                     approvals.append(Approval(f"night_shift:{row['job_id']}", "night_shift", row["job_id"], f"Review Night Shift item: {row['job_type']}", "pending", row["requested_at"]))
         except sqlite3.Error:
             LOGGER.warning("Approval aggregation: night shift source unavailable; results are incomplete.")
+        if self.approvals is not None:
+            try:
+                for item in self.approvals.list_pending():
+                    approvals.append(Approval(f"dispatch:{item.approval_id}", "dispatch", item.approval_id, item.requested_action, "pending", item.requested_at))
+            except Exception:
+                LOGGER.warning("Approval aggregation: dispatch source unavailable; results are incomplete.")
         self.repository.audit_aggregation("approval_aggregation")
         return sorted({(item.source_system, item.source_item_id): item for item in approvals}.values(), key=lambda item: (item.requested_at, item.source_system, item.source_item_id))
 

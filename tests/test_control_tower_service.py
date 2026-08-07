@@ -146,3 +146,15 @@ def test_schema_migration_is_idempotent_for_earlier_audit_table(database):
         apply_schema(connection)
         columns = {row[1] for row in connection.execute("PRAGMA table_info(control_tower_audit_log)")}
     assert {"operation", "correlation_id", "outcome", "metadata"} <= columns
+
+
+def test_dispatch_approval_source_failure_keeps_other_approvals_available(database):
+    class BrokenApprovals:
+        def list_pending(self):
+            raise RuntimeError("database internals must not surface")
+
+    service = ControlTowerService(database, approvals=BrokenApprovals())
+    service.initialize()
+    local = service.request_approval("control_tower", "work-1", "Review item", "user")
+    approvals = service.list_approvals()
+    assert [(item.source_system, item.source_item_id) for item in approvals] == [("control_tower", "work-1")]

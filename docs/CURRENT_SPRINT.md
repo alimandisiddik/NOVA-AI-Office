@@ -81,3 +81,16 @@ mutations.
 - Sprint 5B — Executive Control Tower MVP — implemented locally; cooperative review and merge pending
 - Sprint 5D — Google Calendar Integration
 - Sprint 5E — Google Drive Read-Only
+
+## Wave 3 — In Implementation Review
+
+- Sprint 5B.1 — Agent Dispatch & Approval Operations — implemented locally
+  on `sprint/5b1-agent-dispatch-approval`; cooperative review in progress,
+  not yet merged — see `docs/WAVE_3_INTEGRATION_CONTRACT.md` and
+  `docs/SPRINT_5B1.md`. Delivered: canonical `DispatchService`/
+  `ApprovalService`, static `AgentRegistry` (eight agents), additive
+  `dispatches`/`dispatch_attempts`/`approvals`/`approval_audit`/
+  `dispatch_audit_log`/`dispatch_leases` schema, and Control Tower's
+  `list_approvals()` extended with the dispatch/approval source.
+- Sprint 5F — Full Night Shift Automation — not started; depends on 5B.1
+  merging first per `docs/WAVE_3_INTEGRATION_CONTRACT.md`'s merge order.

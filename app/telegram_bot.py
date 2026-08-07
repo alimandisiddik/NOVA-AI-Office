@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Final, cast
 
 from telegram import Update
+from telegram import Message, User
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -28,6 +29,12 @@ from app.memory.formatters import (
 )
 from app.nightshift.service import NightShiftService
 from app.control_tower.service import ControlTowerService
+
+from app.dispatch.service import DispatchService
+from app.dispatch.approvals import ApprovalService
+from app.dispatch.models import DispatchRequest
+from app.dispatch.errors import DispatchError, DispatchUnavailableError
+
 from app.control_tower.repository import ControlTowerError, InvalidCategoryError, ValidationError
 from app.memory.repositories import (
     AmbiguousTaskError,
@@ -79,6 +86,7 @@ HELP_MESSAGE: Final = (
     "/start, /help, /status\n"
     "/project, /projects, /task, /tasks, /note, /decision\n"
     "/capture, /today, /approvals, /shutdown, /morning\n"
+    "/dispatch, /dispatches, /dispatchstatus, /approve, /reject, /canceldispatch, /retrydispatch\n"
     "/resume, /progress, /continue\n"
     "/route <pesan> — klasifikasi cepat\n"
     "/plan <pesan> — rencana eksekusi lengkap\n"
@@ -679,6 +687,19 @@ def _control_tower(context: ContextTypes.DEFAULT_TYPE) -> ControlTowerService | 
     service = context.application.bot_data.get("control_tower")
     return service if isinstance(service, ControlTowerService) else None
 
+def _dispatch_svc(context: ContextTypes.DEFAULT_TYPE) -> DispatchService:
+    svc = context.application.bot_data.get("dispatch_svc")
+    if svc is None:
+        raise DispatchUnavailableError("Dispatch service is unavailable.")
+    return cast(DispatchService, svc)
+
+def _approval_svc(context: ContextTypes.DEFAULT_TYPE) -> ApprovalService:
+    svc = context.application.bot_data.get("approval_svc")
+    if svc is None:
+        raise DispatchUnavailableError("Approval service is unavailable.")
+    return cast(ApprovalService, svc)
+
+
 
 def _bounded_message(lines: list[str], limit: int = 3500) -> str:
     result = "\n".join(lines)
@@ -806,6 +827,139 @@ async def morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lines.append("• Latest Night Shift morning brief is available.")
     await message.reply_text(_bounded_message(lines))
 
+
+
+async def _dispatch_reply_error(message: Message, action: str, error: Exception) -> None:
+    if isinstance(error, DispatchError):
+        text = f"{action}: the request cannot be completed safely."
+    else:
+        LOGGER.error("Dispatch Telegram operation failed: %s", type(error).__name__)
+        text = f"{action}: temporary problem. Please try again later."
+    await message.reply_text(_bounded_message([text]))
+
+
+async def _dispatch_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Message | None:
+    if not await _require_authorized_user(update, context):
+        return None
+    return update.effective_message
+
+
+async def handle_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) not in {3, 4}:
+        await message.reply_text("Usage: /dispatch <agent_id> <capability> [payload_ref]")
+        return
+    actor = f"user:{update.effective_user.id}" if update.effective_user else "user:unknown"
+    try:
+        request = DispatchRequest(
+            source_type="telegram_direct", source_id=f"telegram:{message.message_id}",
+            agent_id=parts[1], capability=parts[2], payload_ref=parts[3] if len(parts) == 4 else "",
+            idempotency_key=f"telegram:{message.message_id}", requested_by=actor,
+        )
+        record = _dispatch_svc(context).create_dispatch(request, actor)
+        await message.reply_text(_bounded_message([f"Dispatch {record.dispatch_id[:12]} created: {record.status}. "]))
+    except Exception as error:
+        await _dispatch_reply_error(message, "Dispatch creation failed", error)
+
+
+async def handle_dispatches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    try:
+        records = _dispatch_svc(context).list_dispatches(limit=20)
+        if not records:
+            await message.reply_text("No dispatches.")
+            return
+        lines = ["Recent dispatches:"]
+        lines.extend(f"{item.dispatch_id[:12]} | {item.agent_id} | {item.capability} | {item.status}" for item in records)
+        await message.reply_text(_bounded_message(lines))
+    except Exception as error:
+        await _dispatch_reply_error(message, "Dispatch listing failed", error)
+
+
+async def handle_dispatchstatus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) != 2:
+        await message.reply_text("Usage: /dispatchstatus <dispatch_id>")
+        return
+    try:
+        record = _dispatch_svc(context).get_dispatch(parts[1])
+        await message.reply_text(_bounded_message([
+            f"Dispatch: {record.dispatch_id[:12]}", f"Status: {record.status}",
+            f"Agent: {record.agent_id}", f"Capability: {record.capability}",
+        ]))
+    except Exception as error:
+        await _dispatch_reply_error(message, "Dispatch status failed", error)
+
+
+async def handle_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) != 2 or update.effective_user is None:
+        await message.reply_text("Usage: /approve <approval_id>")
+        return
+    try:
+        decision = _approval_svc(context).approve(parts[1], update.effective_user.id)
+        record = _dispatch_svc(context).dispatch(decision.dispatch_id, f"user:{update.effective_user.id}")
+        await message.reply_text(_bounded_message([f"Approval recorded. Dispatch: {record.status}. "]))
+    except Exception as error:
+        await _dispatch_reply_error(message, "Approval failed", error)
+
+
+async def handle_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2 or update.effective_user is None:
+        await message.reply_text("Usage: /reject <approval_id> [reason]")
+        return
+    try:
+        _approval_svc(context).reject(parts[1], update.effective_user.id, parts[2] if len(parts) == 3 else "")
+        await message.reply_text("Approval rejected.")
+    except Exception as error:
+        await _dispatch_reply_error(message, "Rejection failed", error)
+
+
+async def handle_canceldispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) != 2 or update.effective_user is None:
+        await message.reply_text("Usage: /canceldispatch <dispatch_id>")
+        return
+    try:
+        result = _dispatch_svc(context).cancel_dispatch(parts[1], f"user:{update.effective_user.id}", "Telegram cancellation")
+        await message.reply_text(f"Dispatch cancelled: {result.dispatch_id[:12]}.")
+    except Exception as error:
+        await _dispatch_reply_error(message, "Cancellation failed", error)
+
+
+async def handle_retrydispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _dispatch_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) != 2 or update.effective_user is None:
+        await message.reply_text("Usage: /retrydispatch <dispatch_id>")
+        return
+    try:
+        record = _dispatch_svc(context).retry_dispatch(parts[1], f"user:{update.effective_user.id}")
+        await message.reply_text(f"Dispatch retry completed: {record.status}.")
+    except Exception as error:
+        await _dispatch_reply_error(message, "Retry failed", error)
+
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
@@ -813,6 +967,8 @@ def build_application(
     provider: ProviderGatewayService | None = None,
     night_shift: NightShiftService | None = None,
     control_tower: ControlTowerService | None = None,
+    dispatch: DispatchService | None = None,
+    approvals: ApprovalService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -821,6 +977,10 @@ def build_application(
     application.bot_data["execution"] = execution
     application.bot_data["night_shift"] = night_shift
     application.bot_data["control_tower"] = control_tower
+    if dispatch is not None:
+        application.bot_data["dispatch_svc"] = dispatch
+    if approvals is not None:
+        application.bot_data["approval_svc"] = approvals
     application.bot_data["provider"] = provider
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -854,4 +1014,14 @@ def build_application(
     application.add_handler(CommandHandler("approvals", approvals_handler))
     application.add_handler(CommandHandler("shutdown", shutdown_handler))
     application.add_handler(CommandHandler("morning", morning_handler))
+
+    if dispatch is not None:
+        application.add_handler(CommandHandler("dispatch", handle_dispatch))
+        application.add_handler(CommandHandler("dispatches", handle_dispatches))
+        application.add_handler(CommandHandler("dispatchstatus", handle_dispatchstatus))
+        application.add_handler(CommandHandler("approve", handle_approve))
+        application.add_handler(CommandHandler("reject", handle_reject))
+        application.add_handler(CommandHandler("canceldispatch", handle_canceldispatch))
+        application.add_handler(CommandHandler("retrydispatch", handle_retrydispatch))
+
     return application

@@ -1,6 +1,6 @@
 # Sprint 5B.1 — Agent Dispatch & Approval Operations
 
-## Status: Proposed (architecture, not yet implemented)
+## Status: Implementation under review
 
 ## Governing contract
 
@@ -71,10 +71,12 @@ those and future sprints build on, instead of a fourth parallel one.
 
 - `app/dispatch/__init__.py`, `service.py`, `approvals.py`, `registry.py`,
   `models.py`, `repository.py`, `schema.py`, `errors.py`, `adapters.py`.
-- `tests/test_dispatch_schema.py`, `test_dispatch_repository.py`,
-  `test_dispatch_service.py`, `test_approval_service.py`,
+- `tests/test_dispatch_service.py`, `test_approval_service.py`,
   `test_agent_registry.py`, `test_dispatch_security.py`,
-  `test_telegram_dispatch.py`.
+  `test_telegram_dispatch.py`. Schema and repository behavior are covered
+  within `test_dispatch_service.py`/`test_approval_service.py`
+  (idempotent-initialize, CAS transitions, audit pairing) rather than in
+  dedicated `test_dispatch_schema.py`/`test_dispatch_repository.py` files.
 - One additive block in `app/main.py` (contract §12, insertion point 2) and
   one additive kwarg on the existing `control_tower` construction (insertion
   point 3).
@@ -112,24 +114,24 @@ subprocess/`os.system`-monkeypatch test proving no external call exists.
 
 ## Acceptance criteria
 
-- [ ] `DispatchService`, `ApprovalService`, `AgentRegistry` implement every
++ [x] `DispatchService`, `ApprovalService`, `AgentRegistry` implement every
       method in contract §2 with the exact signatures, DTOs, and errors
       specified there.
-- [ ] All six new tables created idempotently (contract §9); no existing
++ [x] All six new tables created idempotently (contract §9); no existing
       table or column altered.
-- [ ] `ControlTowerService.list_approvals()` includes pending approvals from
++ [x] `ControlTowerService.list_approvals()` includes pending approvals from
       `ApprovalService` when `approvals` is injected, with no change to its
       existing execution/night_shift sources.
-- [ ] `docs/AGENT_REGISTRY.md`'s "Active agents" table is populated with all
++ [x] `docs/AGENT_REGISTRY.md`'s "Active agents" table is populated with all
       eight agents and their capability allowlists.
-- [ ] No agent capability grants git mutation, secret change, or paid
++ [x] No agent capability grants git mutation, secret change, or paid
       action — verified by a test asserting these strings are absent from
       every entry in `AGENT_REGISTRY`.
-- [ ] Zero automatic approval path exists — verified by a test asserting no
++ [x] Zero automatic approval path exists — verified by a test asserting no
       code path other than `approve()` with a matching authorized user ID
       can produce `status='approved'`.
-- [ ] All 392 pre-Wave-3 tests plus all new Sprint 5B.1 tests pass.
-- [ ] `app/nightshift/`, `app/execution/`, `app/google_workspace/` are
++ [x] All 392 pre-Wave-3 tests plus all new Sprint 5B.1 tests pass.
++ [x] `app/nightshift/`, `app/execution/`, `app/google_workspace/` are
       untouched by this sprint's diff.
 
 ## Known limitations
