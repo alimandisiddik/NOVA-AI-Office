@@ -42,6 +42,7 @@ from app.nightshift.service import NightShiftService
 from app.nightshift.worker import NightShiftWorker
 
 from app.control_tower.service import ControlTowerService
+from app.brief.service import ExecutiveBriefService
 
 from app.dispatch.service import DispatchService
 from app.dispatch.approvals import ApprovalService
@@ -134,6 +135,7 @@ HELP_MESSAGE: Final = (
     "/knowledgesource <judul> | <jenis sumber> | <sitasi> [| <lokator>]\n"
     "/knowledgeitem <id sumber> | <judul> | <ringkasan> [| <tag>] [| <keyakinan>]\n"
     "/knowledgequery <kata kunci atau tag>\n"
+    "/execbrief — ringkasan eksekutif terjadwal (deterministik, tanpa AI)\n"
     "Anda juga dapat memakai bahasa natural sederhana."
 )
 STATUS_MESSAGE: Final = (
@@ -806,6 +808,10 @@ def _control_tower(context: ContextTypes.DEFAULT_TYPE) -> ControlTowerService | 
     service = context.application.bot_data.get("control_tower")
     return service if isinstance(service, ControlTowerService) else None
 
+def _executive_brief(context: ContextTypes.DEFAULT_TYPE) -> ExecutiveBriefService | None:
+    service = context.application.bot_data.get("executive_brief")
+    return service if isinstance(service, ExecutiveBriefService) else None
+
 def _dissertation(context: ContextTypes.DEFAULT_TYPE) -> DissertationService | None:
     service = context.application.bot_data.get("dissertation")
     return service if isinstance(service, DissertationService) else None
@@ -1009,6 +1015,84 @@ async def morning_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if brief.latest_night_shift_brief is not None:
         lines.append("• Latest Night Shift morning brief is available.")
     await message.reply_text(_bounded_message(lines))
+
+
+async def execbrief_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message is None:
+        return
+    executive_brief = _executive_brief(context)
+    if executive_brief is None:
+        await message.reply_text("Executive brief is temporarily unavailable.")
+        return
+    try:
+        lines = _executive_brief_lines(executive_brief.generate_morning_brief())
+    except Exception as error:
+        await _control_tower_error(message, "Executive brief failed", error)
+        return
+    await message.reply_text(_bounded_message(lines))
+
+
+def _executive_brief_lines(brief: object) -> list[str]:
+    from app.brief.models import BriefItem
+
+    item = cast(BriefItem, brief)
+    lines = ["NOVA — Morning Executive Brief", item.generated_at, "", "ATTENTION"]
+    if item.active_priorities:
+        for work_item in item.active_priorities[:3]:
+            lines.append(
+                f"• [{work_item.status}] {_brief_text(work_item.title, 120)} — "
+                f"{_brief_text(item.owners[work_item.item_id], 48)}; "
+                f"{_brief_text(item.next_actions[work_item.item_id], 100)}"
+            )
+    else:
+        lines.append("• No active work items.")
+
+    lines.extend(["", "BLOCKED / APPROVALS"])
+    lines.extend(f"• Blocked: {_brief_text(work_item.title, 120)}" for work_item in item.blockers)
+    lines.extend(
+        f"• Approval: {_brief_text(approval.requested_action, 120)} ({_brief_text(approval.source_system, 32)})"
+        for approval in item.approvals_pending
+    )
+    if not item.blockers and not item.approvals_pending:
+        lines.append("• No blocked items or pending approvals.")
+
+    lines.extend(["", "ACTIVE WORK"])
+    if item.active_work:
+        for work_item in item.active_work:
+            lines.append(
+                f"• [{work_item.status}] {_brief_text(work_item.title, 100)} "
+                f"({_project_label(work_item.project_id)}; {_brief_text(item.owners[work_item.item_id], 48)})"
+            )
+    else:
+        lines.append("• No active work items.")
+
+    lines.extend(["", "KNOWLEDGE / CONTEXT"])
+    if item.knowledge_context:
+        for result in item.knowledge_context:
+            lines.append(
+                f"• {_brief_text(result.item.title, 100)} — "
+                f"{_brief_text(result.source.citation_text, 110)}"
+            )
+    else:
+        lines.append("• No linked knowledge context.")
+
+    lines.extend(["", "DECISIONS / NEXT ACTIONS"])
+    lines.extend(f"• Decision: {_brief_text(decision.summary, 120)}" for decision in item.recent_decisions)
+    lines.extend(f"• Completed today: {_brief_text(work_item.title, 100)}" for work_item in item.completed_since_last_brief)
+    if not item.recent_decisions and not item.completed_since_last_brief:
+        lines.append("• Review the active work items above.")
+    if item.night_shift_summary is not None:
+        lines.append("• Latest Night Shift morning brief is available.")
+    return lines
+
+def _brief_text(value: str, limit: int) -> str:
+    return _CONTROL_CHAR_PATTERN.sub(" ", value)[:limit]
+
+def _project_label(project_id: int | None) -> str:
+    return f"project #{project_id}" if project_id is not None else "no project"
 
 
 
@@ -1555,6 +1639,7 @@ def build_application(
     dissertation: DissertationService | None = None,
     agent_assignments: AgentAssignmentService | None = None,
     knowledge: KnowledgeService | None = None,
+    executive_brief: ExecutiveBriefService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1565,6 +1650,7 @@ def build_application(
     application.bot_data["control_tower"] = control_tower
     application.bot_data["dissertation"] = dissertation
     application.bot_data["knowledge"] = knowledge
+    application.bot_data["executive_brief"] = executive_brief
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1613,7 +1699,7 @@ def build_application(
     application.add_handler(CommandHandler("knowledgesource", knowledgesource_handler))
     application.add_handler(CommandHandler("knowledgeitem", knowledgeitem_handler))
     application.add_handler(CommandHandler("knowledgequery", knowledgequery_handler))
-
+    application.add_handler(CommandHandler("execbrief", execbrief_handler))
 
     if dispatch is not None:
         application.add_handler(CommandHandler("dispatch", handle_dispatch))
