@@ -121,6 +121,7 @@ def test_telegram_memory_commands_and_sprint_one_compatibility(tmp_path) -> None
     assert "Perintah NOVA:" in run(help_command, FakeUpdate(7), context(memory))
     assert "NOVA System Status" in run(status, FakeUpdate(7), context(memory))
     assert "Perintah diterima:" in run(handle_text, FakeUpdate(7, "hello"), context(memory))
+    assert "Perintah diterima:" in run(handle_text, FakeUpdate(7, "1"), context(memory))
 
 
 def test_unauthorized_telegram_user_cannot_access_memory(tmp_path) -> None:

@@ -502,6 +502,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if message is None:
         return
     user_message = message.text or ""
+    conversation = context.application.bot_data.get("conversation")
+    resolution = conversation.try_resolve_pending(update.effective_user.id, user_message) if conversation else None
+    if resolution is not None:
+        await message.reply_text(resolution.response_text)
+        return
     intent = parse_workspace_intent(user_message)
     if intent is not None:
         if intent.clarification:
