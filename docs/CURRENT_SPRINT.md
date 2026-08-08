@@ -391,3 +391,38 @@ Next dependency stage: **7C (Morning Executive Brief)**, which reads 7A's
 `owner_for()`/`next_action_for()` and 7D's `get_active_assignment_summary()`
 once this branch is accepted, per `docs/WAVE_6_SHARED_CONTRACTS.md` §5's
 integration order (7A/7B/7D → 7C → 7E).
+
+## Sprint 7C — Morning Executive Brief
+
+Status: deterministic, read-only composition implemented on the Sprint 7C
+worktree; independently reviewed and corrected before integration. See
+`docs/executive-morning-brief.md`.
+
+Independent review found the first implementation folded the new executive
+brief into the existing `/morning` command and, to source it, added three
+new read methods to `app/control_tower/{repository,service}.py`
+(`list_decisions()`, `list_work_items()`, `list_pending_approvals()`). Both
+choices directly contradict the frozen `docs/SPRINT_7C.md`: §2/§14 require a
+**new**, distinct `/execbrief` command specifically so `/morning`'s existing,
+tested behavior is not changed, and §13 explicitly prohibits any edit to
+`app/control_tower/**` (7A's exclusive territory per
+`docs/WAVE_6_SHARED_CONTRACTS.md` §4). This was a contract violation, not an
+acceptable deviation — corrected as follows:
+
+- `app/control_tower/repository.py` and `app/control_tower/service.py` are
+  reverted to their pre-7C state (byte-identical); zero edits remain.
+- `/morning` is restored to its original, unmodified handler and output.
+- A new `/execbrief` command is added, backed by the same
+  `ExecutiveBriefService` (one composition layer, no duplicated business
+  logic), registered exactly once, after every other Wave 6 command and
+  before the generic text fallback.
+- `ExecutiveBriefService` now sources "waiting for decision" and "recent
+  decisions" using only pre-existing public reads
+  (`ControlTowerService.get_today_priorities()`, `.list_approvals()`,
+  `.owner_for()`, `.next_action_for()`, `.unresolved_blocker_count()`, and
+  the already-public `.repository.list_work_items()` /
+  `.repository.list_decisions_for_project()`) instead of the removed
+  control-tower-side additions.
+
+Full regression re-run after the fix; see the review record for the exact
+pass count.

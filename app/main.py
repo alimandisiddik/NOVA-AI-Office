@@ -14,6 +14,7 @@ from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryServi
 from app.execution.service import ExecutionService
 from app.nightshift import NightShiftService
 from app.control_tower.service import ControlTowerService
+from app.brief.service import ExecutiveBriefService
 
 from app.dispatch.registry import AgentRegistry
 from app.dispatch.approvals import ApprovalService
@@ -158,6 +159,8 @@ def main() -> int:
         logger.error("Knowledge Operations schema initialization failed.")
         return 1
 
+    executive_brief = ExecutiveBriefService(control_tower, night_shift=night_shift, knowledge=knowledge)
+
     provider_svc: ProviderGatewayService | None = None
 
     if settings.nova_provider_base_url and settings.nova_provider_api_key:
@@ -202,6 +205,7 @@ def main() -> int:
         dissertation,
         agent_assignments,
         knowledge,
+        executive_brief,
     )
     application.run_polling()
     return 0
