@@ -26,6 +26,8 @@ from app.dissertation.repository import (
     DissertationTargetNotFoundError,
     InvalidDissertationValueError,
 )
+from app.knowledge.service import InvalidKnowledgeValueError, KnowledgeService
+from app.knowledge.repository import KnowledgeError
 from app.memory.database import MemoryDatabaseError
 from app.memory.formatters import (
     continue_message,
@@ -129,6 +131,9 @@ HELP_MESSAGE: Final = (
     "/dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]\n"
     "/dissertation addsource <chapter n|-> | judul | jenis | sitasi | lokator\n"
     "/dissertation addevidence <source id> | <chapter n|-> | ringkasan | lokator | keyakinan\n"
+    "/knowledgesource <judul> | <jenis sumber> | <sitasi> [| <lokator>]\n"
+    "/knowledgeitem <id sumber> | <judul> | <ringkasan> [| <tag>] [| <keyakinan>]\n"
+    "/knowledgequery <kata kunci atau tag>\n"
     "Anda juga dapat memakai bahasa natural sederhana."
 )
 STATUS_MESSAGE: Final = (
@@ -148,6 +153,10 @@ def _settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 
 def _memory(context: ContextTypes.DEFAULT_TYPE) -> WorkspaceMemoryService:
     return cast(WorkspaceMemoryService, context.application.bot_data["memory"])
+
+
+def _knowledge(context: ContextTypes.DEFAULT_TYPE) -> KnowledgeService | None:
+    return cast(KnowledgeService | None, context.application.bot_data.get("knowledge"))
 
 
 def _provider_svc(context: ContextTypes.DEFAULT_TYPE) -> ProviderGatewayService | None:
@@ -1442,6 +1451,97 @@ async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await message.reply_text(_bounded_message(lines))
 
 
+async def knowledgesource_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    fields = _pipe_fields(" ".join(context.args), 3, 4)
+    if fields is None:
+        await message.reply_text("Usage: /knowledgesource <title> | <source type> | <citation> [| <locator>]")
+        return
+    try:
+        source = service.create_source(
+            fields[0], fields[1], fields[2], f"user:{update.effective_user.id}",
+            origin_system="telegram", origin_ref=fields[3] if len(fields) == 4 else None,
+        )
+        await message.reply_text(f"Knowledge source created: #{source.id} {source.title} ({source.source_type})")
+    except (InvalidKnowledgeValueError, KnowledgeError) as error:
+        await message.reply_text(str(error))
+    except Exception:
+        LOGGER.exception("Knowledge source handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
+async def knowledgeitem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    fields = _pipe_fields(" ".join(context.args), 3, 5)
+    if fields is None:
+        await message.reply_text("Usage: /knowledgeitem <source id> | <title> | <summary> [| <tags>] [| <confidence>]")
+        return
+    try:
+        item = service.create_item(
+            int(fields[0]), fields[1], fields[2], f"user:{update.effective_user.id}",
+            tags=fields[3] if len(fields) >= 4 else "",
+            confidence=fields[4] if len(fields) == 5 else "MEDIUM",
+        )
+        await message.reply_text(
+            f"Knowledge item created: #{item.id} from source #{item.source_id} (confidence: {item.confidence})"
+        )
+    except (InvalidKnowledgeValueError, KnowledgeError) as error:
+        await message.reply_text(str(error))
+    except (ValueError, TypeError):
+        await message.reply_text("Source id must be a positive integer.")
+    except Exception:
+        LOGGER.exception("Knowledge item handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
+async def knowledgequery_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    query = " ".join(context.args)
+    if not query.strip():
+        await message.reply_text("Usage: /knowledgequery <keyword or tag>")
+        return
+    try:
+        results = service.query(keyword=query)
+        lines = ["Knowledge results:"] + (
+            [
+                f"• #{result.item.id} {result.item.title} — {result.item.summary}\n"
+                f"  Source #{result.source.id}: {result.source.title} ({result.source.source_type})\n"
+                f"  Citation: {result.source.citation_text}"
+                for result in results
+            ] or ["• None."]
+        )
+        await message.reply_text(_bounded_message(lines))
+    except InvalidKnowledgeValueError as error:
+        await message.reply_text(str(error))
+    except Exception:
+        LOGGER.exception("Knowledge query handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
@@ -1454,6 +1554,7 @@ def build_application(
     night_worker: NightShiftWorker | None = None,
     dissertation: DissertationService | None = None,
     agent_assignments: AgentAssignmentService | None = None,
+    knowledge: KnowledgeService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1463,6 +1564,7 @@ def build_application(
     application.bot_data["night_shift"] = night_shift
     application.bot_data["control_tower"] = control_tower
     application.bot_data["dissertation"] = dissertation
+    application.bot_data["knowledge"] = knowledge
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1508,6 +1610,9 @@ def build_application(
     application.add_handler(CommandHandler("nightqueue", nightqueue_command))
     application.add_handler(CommandHandler("wake", wake_command))
     application.add_handler(CommandHandler("dissertation", dissertation_handler))
+    application.add_handler(CommandHandler("knowledgesource", knowledgesource_handler))
+    application.add_handler(CommandHandler("knowledgeitem", knowledgeitem_handler))
+    application.add_handler(CommandHandler("knowledgequery", knowledgequery_handler))
 
 
     if dispatch is not None:

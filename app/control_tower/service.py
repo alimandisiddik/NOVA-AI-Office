@@ -22,6 +22,7 @@ from app.memory.database import MemoryDatabase, MemoryDatabaseError
 from app.security import SENSITIVE_CONTENT_PATTERN
 
 if TYPE_CHECKING:
+    from app.agent_assignment.service import AgentAssignmentService
     from app.execution.service import ExecutionService
     from app.nightshift.service import NightShiftService
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.config import ConfigurationError, load_settings
 from app.dissertation.service import DissertationService
+from app.knowledge.service import KnowledgeService
 from app.memory import MemoryDatabase, MemoryDatabaseError, WorkspaceMemoryService
 from app.execution.service import ExecutionService
 from app.nightshift import NightShiftService
@@ -133,6 +134,7 @@ def main() -> int:
         execution=execution_svc,
         night_shift=night_shift,
         approvals=approval_svc,
+        agent_assignments=agent_assignments,
     )
     try:
         control_tower.initialize()
@@ -145,6 +147,15 @@ def main() -> int:
         dissertation.initialize()
     except MemoryDatabaseError:
         logger.error("Dissertation Workspace initialization failed.")
+        return 1
+
+    knowledge = KnowledgeService(
+        MemoryDatabase(settings.nova_memory_db_path), memory=memory, control_tower=control_tower
+    )
+    try:
+        knowledge.initialize()
+    except MemoryDatabaseError:
+        logger.error("Knowledge Operations schema initialization failed.")
         return 1
 
     provider_svc: ProviderGatewayService | None = None
@@ -179,8 +190,18 @@ def main() -> int:
             ProviderGatewayAgentAdapter.set_service_factory(lambda: None)
 
     application = build_application(
-        settings, memory, execution_svc, provider_svc, night_shift, control_tower,
-        dispatch_svc, approval_svc, night_worker, dissertation, agent_assignments,
+        settings,
+        memory,
+        execution_svc,
+        provider_svc,
+        night_shift,
+        control_tower,
+        dispatch_svc,
+        approval_svc,
+        night_worker,
+        dissertation,
+        agent_assignments,
+        knowledge,
     )
     application.run_polling()
     return 0
