@@ -118,7 +118,20 @@ schema check; existing source types are neither repurposed nor migrated.
 `workspace_write` is a specific approval-required capability, not a re-label
 of `control_tower_work_item`, `night_shift_job`, `telegram_direct`,
 `external_communication`, or `publication`. Existing dispatch behavior remains
-backward compatible. The action service alone creates this dispatch and its
+backward compatible.
+
+**As-built at G4:** the registered `adapter_id` (`google_workspace_adapter`)
+is reserved vocabulary only — no `GoogleWorkspaceAgentAdapter` executes it,
+and `DispatchService.dispatch()`/`retry_dispatch()` are never called for a
+`workspace_action` dispatch. `DispatchService`/`ApprovalService` provide only
+the canonical create/approve/reject linkage and idempotency; the entire
+execution CAS (`approved -> executing -> succeeded|failed|outcome_unknown`)
+and the single `DocsWriteService` call live in `WorkspaceActionService`
+itself (§5). This is deliberately safer than routing through generic
+dispatch execution: it makes it structural, not just policy, that no
+generic `/dispatch`/`/retrydispatch` path can ever reach a Docs write.
+
+The action service alone creates this dispatch and its
 approval linkage.
 
 ## 4. Exact approval snapshot and approval policy — AD-8E-06

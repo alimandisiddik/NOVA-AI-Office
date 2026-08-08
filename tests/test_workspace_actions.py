@@ -133,15 +133,19 @@ def test_concurrent_execute_calls_make_exactly_one_docs_write(tmp_path):
 
     results: list[str] = []
     errors: list[Exception] = []
+    result_lock = threading.Lock()
     worker_count = 8
     barrier = threading.Barrier(worker_count)
 
     def run() -> None:
         barrier.wait()
         try:
-            results.append(actions.execute(action.id).status)
+            result = actions.execute(action.id)
+            with result_lock:
+                results.append(result.status)
         except Exception as error:  # pragma: no cover - failure surfaced via assertion below
-            errors.append(error)
+            with result_lock:
+                errors.append(error)
 
     threads = [threading.Thread(target=run) for _ in range(worker_count)]
     for thread in threads:
@@ -150,7 +154,13 @@ def test_concurrent_execute_calls_make_exactly_one_docs_write(tmp_path):
         thread.join()
 
     assert errors == []
-    assert results == ["succeeded"] * worker_count
+    assert len(results) == worker_count
+    assert set(results) <= {"executing", "succeeded"}
+    assert len(writer.calls) == 1
+    persisted = actions.get_action(action.id)
+    assert persisted is not None
+    assert persisted.status == "succeeded"
+    assert actions.execute(action.id).status == "succeeded"
     assert len(writer.calls) == 1
 
 

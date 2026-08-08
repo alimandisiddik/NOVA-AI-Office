@@ -35,6 +35,17 @@ class ScopeBundle(enum.Enum):
     DOCS_WRITE = (*DEFAULT, GoogleScope.DRIVE_FILE.value)
     SHEETS_READ = (*DEFAULT, GoogleScope.SHEETS_READONLY.value)
     SLIDES_READ = (*DEFAULT, GoogleScope.SLIDES_READONLY.value)
+    # Union of every active read scope (§5a of docs/WAVE_7_SHARED_CONTRACTS.md)
+    # for constructing the one shared read-domain WorkspaceConnectorBundle.
+    WORKSPACE_READ = (
+        *DEFAULT,
+        GoogleScope.CALENDAR_READONLY.value,
+        GoogleScope.DRIVE_READONLY.value,
+        GoogleScope.GMAIL_READONLY.value,
+        GoogleScope.DOCS_READONLY.value,
+        GoogleScope.SHEETS_READONLY.value,
+        GoogleScope.SLIDES_READONLY.value,
+    )
 
 
 def canonicalize_scopes(scopes: list[str] | tuple[str, ...]) -> tuple[str, ...]:

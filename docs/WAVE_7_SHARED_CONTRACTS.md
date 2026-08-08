@@ -341,28 +341,62 @@ UX already re-prompts consent on scope changes, so a second consent step at
 
 **Decision:** every read method (8A/8B/8C) lives in a file with no network
 path to a write endpoint even if broader scopes were somehow granted. 8E's
-write capability is added as **new, separate files**
-(`app/google_workspace/{gmail,calendar,docs,sheets,slides}/
-write_service.py`) rather than new methods bolted onto existing read
-service classes, so "no read-service file contains a mutating call" is
-grep-verifiable per service.
+write capability is added as a **new, separate class**
+(`app.google_workspace.docs.service.DocsWriteService`) with no method
+overlap with the read class, so "no read-service class contains a mutating
+call" is grep-verifiable per service.
+
+**Revised at G4 (implementation reality, no behavior change):** the
+originally-frozen text called for a physically separate
+`write_service.py` file per service. The as-built G4 state instead keeps
+`DocsWriteService` in the same file as the read-only `DocsService`
+(`app/google_workspace/docs/service.py`) as a distinct class with a
+disjoint method surface (`DocsService.get_document` vs.
+`DocsWriteService.create_private_document`). The safety property this
+decision exists to guarantee — a read-service class can never reach a
+mutating call — holds at the class boundary exactly as it would at the
+file boundary; this is a file-organization correction, not a relaxation
+of AD-W7-03's invariant.
 
 ### AD-W7-04 External-write approval mechanism — reuse `DispatchService`/`ApprovalService`, close the documented `GEMINI`-adapter gap
 
 **Decision:** 8E extends `workspace_agent`'s registered capabilities
-(`app/dispatch/registry.py`) to include `external_communication`, and gives
-it a real `adapter_id` (`google_workspace_adapter`) backed by a new
-`GoogleWorkspaceAgentAdapter` (`app/dispatch/adapters.py`), executed only
-after `DispatchService` transitions the backing `DispatchRecord` to
-`approved`. This closes the exact seam `docs/WAVE_6_SHARED_CONTRACTS.md`
-AD-W6-06 already reserved as an open gap. `WorkspaceAction`'s idempotency/
+(`app/dispatch/registry.py`) to include `workspace_write`, with a
+registered `adapter_id` (`google_workspace_adapter`) reserved for a future
+generic-dispatch execution path. `WorkspaceAction`'s idempotency/
 replay-protection is `DispatchService.create_dispatch()`'s existing
 uniqueness, verbatim — not reimplemented.
 
 **Files touched outside Wave 7's new packages (flagged for extra
-scrutiny):** `app/dispatch/registry.py`, `app/dispatch/adapters.py` —
-8E-exclusive, Stage 4 only, no parallel-branch collision risk since 8E is
-the sole Stage 4 sprint.
+scrutiny):** `app/dispatch/registry.py` — 8E-exclusive, Stage 4 only, no
+parallel-branch collision risk since 8E is the sole Stage 4 sprint.
+
+**Revised at G4 (implementation reality, safer than originally drafted):**
+`app/dispatch/adapters.py` was **not** touched, and no
+`GoogleWorkspaceAgentAdapter` class exists. `workspace_agent`'s registered
+`adapter_id` (`google_workspace_adapter`) does not resolve to any entry in
+`app.dispatch.adapters._ADAPTERS` — calling it raises
+`DispatchUnavailableError`. This is intentional, not an oversight: the
+as-built G4 invariant is —
+
+- `DispatchService`/`ApprovalService` provide the canonical
+  create/approve/reject linkage and idempotency for a `workspace_action`
+  dispatch, exactly as for every other source type — nothing more.
+- `WorkspaceActionService` (`app/workspace_actions/service.py`) owns the
+  entire external-write execution state machine — freshness/integrity
+  re-validation, the `approved -> executing` CAS claim, the single typed
+  `DocsWriteService` call, and finalization — independently of
+  `DispatchService.dispatch()`/`retry_dispatch()`.
+- Generic dispatch execution (`/dispatch`, `/retrydispatch`, or the
+  `ApprovalService`-only fallback branch of `/approve`) **cannot** reach a
+  real Workspace write: `workspace_write` capability is structurally
+  rejected for any dispatch not sourced as `workspace_action`
+  (`DispatchService._validate_request`), and even a `workspace_action`
+  dispatch's own `adapter_id` resolves to nothing executable.
+- `google_workspace_adapter` is reserved vocabulary for a possible future
+  generic-execution path; it is **not a live execution adapter** in Sprint
+  8E and must not be treated as one by any future sprint without an
+  explicit new decision.
 
 ### AD-W7-05 A real Google-side write — including a Gmail draft or a Docs/Sheets/Slides mutation — is always EXTERNAL_WRITE; 8C never performs one
 

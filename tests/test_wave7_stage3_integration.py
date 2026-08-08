@@ -178,9 +178,15 @@ def test_main_google_workspace_defined_before_workspace_bridge_construction() ->
     """Regression guard for the G3 initialization-order defect: workspace_bridge's
     authenticator selection reads the `google_workspace` name, so that name must be
     assigned earlier in main(), or Python raises UnboundLocalError at startup
-    before the bot ever wires a handler."""
+    before the bot ever wires a handler.
+
+    G4 update: `google_workspace` is now the real, settings-derived
+    WorkspaceConnectorBundle (previously hardcoded to `None` — the G4 review's
+    confirmed production defect), so the literal assignment text changed; the
+    ordering guarantee this test exists to prove is unchanged.
+    """
     source = inspect.getsource(main_module.main)
-    namespace_assignment = source.index("google_workspace: WorkspaceConnectorBundle | None = None")
+    namespace_assignment = source.index("google_workspace = _workspace_bundle_for_settings(settings)")
     bridge_construction = source.index("workspace_bridge = WorkspaceBridgeService(")
     assert namespace_assignment < bridge_construction
 

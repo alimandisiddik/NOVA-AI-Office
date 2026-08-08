@@ -14,8 +14,13 @@ def approval_text(action: WorkspaceAction) -> str:
 
 
 def status_text(action: WorkspaceAction) -> str:
-    suffix = " RECONCILIATION REQUIRED." if action.status == "outcome_unknown" else ""
-    return f"Workspace action #{action.id}: {action.status}.{suffix}"
+    if action.status == "outcome_unknown":
+        return (
+            f"Workspace action #{action.id}: {action.status}. "
+            "WRITE OUTCOME COULD NOT BE CONFIRMED. DO NOT RETRY AUTOMATICALLY. "
+            "MANUAL RECONCILIATION REQUIRED."
+        )
+    return f"Workspace action #{action.id}: {action.status}."
 
 
 def _service(context: Any):

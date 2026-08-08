@@ -10,7 +10,8 @@ from app.drafting.service import DraftingService
 from app.memory.database import MemoryDatabase
 from app.telegram_bot import build_application
 from app.workspace_actions import WorkspaceActionService
-from app.workspace_actions.telegram import createdoc_command, docstatus_command
+from app.workspace_actions.models import WorkspaceAction
+from app.workspace_actions.telegram import createdoc_command, docstatus_command, status_text
 
 
 class Writer:
@@ -59,7 +60,42 @@ def test_docstatus_surfaces_reconciliation_requirement(tmp_path):
     context.args = ["1"]
     update = _update()
     asyncio.run(docstatus_command(update, context))
-    assert "RECONCILIATION REQUIRED" in update.effective_message.replies[-1]
+    reply = update.effective_message.replies[-1]
+    # G4 fix: substance required by docs/SPRINT_8E.md §5 — all three must be present.
+    assert "COULD NOT BE CONFIRMED" in reply
+    assert "DO NOT RETRY AUTOMATICALLY" in reply
+    assert "RECONCILIATION REQUIRED" in reply
+
+
+def test_status_text_outcome_unknown_states_no_retry_and_reconciliation():
+    action = WorkspaceAction(
+        id=1, action_type="create_docs_file", prepared_action_id=1, dispatch_id="d", approval_id="a",
+        payload_schema_version=1, payload_fingerprint="hash", account_namespace=None,
+        idempotency_key="key", correlation_id="corr", requested_chat_id=None, status="outcome_unknown",
+        version=1, provider_reference=None, failure_category="DocsSubmissionUncertainError",
+        requested_at="2026-01-01T00:00:00+00:00", approved_at=None, executing_at="2026-01-01T00:00:00+00:00",
+        completed_at="2026-01-01T00:00:01+00:00", updated_at="2026-01-01T00:00:01+00:00",
+    )
+    text = status_text(action)
+    assert "COULD NOT BE CONFIRMED" in text
+    assert "DO NOT RETRY AUTOMATICALLY" in text
+    assert "MANUAL RECONCILIATION REQUIRED" in text
+    # No document body/content and no provider secret is ever surfaced.
+    assert "Body" not in text and "hash" not in text
+
+
+def test_status_text_succeeded_has_no_reconciliation_language():
+    action = WorkspaceAction(
+        id=1, action_type="create_docs_file", prepared_action_id=1, dispatch_id="d", approval_id="a",
+        payload_schema_version=1, payload_fingerprint="hash", account_namespace=None,
+        idempotency_key="key", correlation_id="corr", requested_chat_id=None, status="succeeded",
+        version=1, provider_reference="doc-1", failure_category=None,
+        requested_at="2026-01-01T00:00:00+00:00", approved_at="2026-01-01T00:00:00+00:00",
+        executing_at="2026-01-01T00:00:00+00:00", completed_at="2026-01-01T00:00:01+00:00",
+        updated_at="2026-01-01T00:00:01+00:00",
+    )
+    text = status_text(action)
+    assert text == "Workspace action #1: succeeded."
 
 
 def test_build_application_registers_workspace_action_commands_before_text_fallback(tmp_path):
