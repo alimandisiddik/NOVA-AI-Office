@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.google_workspace.docs.exceptions import DocsInvalidRequestError, DocsNotFoundError
-from app.google_workspace.docs.service import DocsService
+from app.google_workspace.docs.exceptions import (
+    DocsInvalidRequestError, DocsNotFoundError, DocsPermissionError, DocsSubmissionUncertainError,
+)
+from app.google_workspace.docs.service import DocsService, DocsWriteService
 
 
 def _document_service(raw: object) -> object:
@@ -75,3 +77,66 @@ def test_provider_not_found_is_normalized() -> None:
     with pytest.raises(DocsNotFoundError) as error:
         DocsService(MissingFactory()).get_document("document_1")
     assert "raw provider detail" not in str(error.value)
+
+
+def test_write_service_creates_then_inserts_the_approved_body() -> None:
+    calls = []
+
+    class Documents:
+        def create(self, *, body):
+            calls.append(("create", body))
+            return type("Request", (), {"execute": lambda self: {"documentId": "doc-1"}})()
+
+        def batchUpdate(self, *, documentId, body):
+            calls.append(("batchUpdate", documentId, body))
+            return type("Request", (), {"execute": lambda self: {}})()
+
+    class Client:
+        def documents(self):
+            return Documents()
+
+    factory = type("Factory", (), {"get_service": lambda self, name, version: Client()})()
+    result = DocsWriteService(factory).create_private_document("Memo", "Approved body")
+
+    assert result.document_id == "doc-1"
+    assert calls == [
+        ("create", {"title": "Memo"}),
+        ("batchUpdate", "doc-1", {"requests": [{"insertText": {"location": {"index": 1}, "text": "Approved body"}}]}),
+    ]
+
+
+def test_write_service_network_failure_on_create_is_outcome_unknown_not_failed() -> None:
+    """A timeout/connection drop on documents.create() itself is exactly the
+    ambiguous case the frozen contract calls 'outcome_unknown': the request
+    may have reached Google and created an orphan document before the
+    response was lost. Only a definite server rejection (permission/auth/
+    invalid/rate-limit) is safe to treat as 'no write happened'."""
+
+    class Documents:
+        def create(self, *, body):
+            raise ConnectionError("connection reset")
+
+    class Client:
+        def documents(self):
+            return Documents()
+
+    factory = type("Factory", (), {"get_service": lambda self, name, version: Client()})()
+    with pytest.raises(DocsSubmissionUncertainError):
+        DocsWriteService(factory).create_private_document("Memo", "Body")
+
+
+def test_write_service_definite_rejection_on_create_is_failed_not_outcome_unknown() -> None:
+    class DefiniteError(Exception):
+        status_code = 403
+
+    class Documents:
+        def create(self, *, body):
+            raise DefiniteError("permission denied")
+
+    class Client:
+        def documents(self):
+            return Documents()
+
+    factory = type("Factory", (), {"get_service": lambda self, name, version: Client()})()
+    with pytest.raises(DocsPermissionError):
+        DocsWriteService(factory).create_private_document("Memo", "Body")

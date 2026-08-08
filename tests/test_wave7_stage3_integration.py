@@ -214,11 +214,12 @@ def test_main_authenticator_selection_uses_bundle_authenticator_when_present() -
     assert isinstance(selected, main_module._UnavailableWorkspaceAuthenticator)
 
 
-def test_stage3_wiring_has_no_premature_workspace_execution_path() -> None:
+def test_stage4_wiring_has_a_fail_closed_workspace_action_path() -> None:
     source = "\n".join(
         Path(path).read_text(encoding="utf-8")
         for path in ("app/main.py", "app/telegram_bot.py", "app/drafting/service.py", "app/workspace_bridge/service.py")
     )
 
-    assert "workspace_actions" not in source
+    assert "WorkspaceActionService" in source
+    assert "UnavailableDocsWriter" in source
     assert "ready_for_action" not in Path("app/workspace_bridge/service.py").read_text(encoding="utf-8")

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
-from app.google_workspace.docs.dtos import DocumentContent
+from app.google_workspace.docs.dtos import CreatedDocument, DocumentContent
 from app.google_workspace.docs.exceptions import (
     DocsAuthenticationError, DocsInvalidRequestError, DocsNetworkError, DocsNotFoundError,
-    DocsPermissionError, DocsProviderError, DocsRateLimitError, DocsServiceError,
+    DocsPermissionError, DocsProviderError, DocsRateLimitError, DocsServiceError, DocsSubmissionUncertainError,
 )
 from app.google_workspace.factory import GoogleClientFactory
 
@@ -67,3 +68,51 @@ class DocsService:
         if status == 400: return DocsInvalidRequestError()
         if isinstance(error, (TimeoutError, ConnectionError, OSError)): return DocsNetworkError()
         return DocsProviderError()
+
+
+class DocsWriteService:
+    """Typed, private Docs creation boundary; no sharing or generic execution."""
+
+    def __init__(self, client_factory: GoogleClientFactory) -> None:
+        self._client_factory = client_factory
+
+    def create_private_document(self, title: str, body_text: str) -> CreatedDocument:
+        if not isinstance(title, str) or not title.strip() or len(title) > 200 or not isinstance(body_text, str):
+            raise DocsInvalidRequestError()
+        try:
+            docs = self._client_factory.get_service("docs", "v1").documents()
+            try:
+                created = docs.create(body={"title": title.strip()}).execute()
+            except Exception as error:
+                # A network/transport failure on the create call itself is
+                # exactly the ambiguous case the frozen contract calls out:
+                # the request may have reached Google and created an orphan
+                # document before the response was lost. Only a definite
+                # server response (auth/permission/rate-limit/invalid
+                # rejection) is safe to treat as "no write happened".
+                mapped = DocsService._map_error(error)
+                if isinstance(mapped, DocsNetworkError):
+                    raise DocsSubmissionUncertainError() from error
+                raise mapped from None
+            document_id = created.get("documentId") if isinstance(created, dict) else None
+            if not isinstance(document_id, str) or not document_id:
+                raise DocsProviderError()
+            try:
+                docs.batchUpdate(documentId=document_id, body={"requests": [{"insertText": {"location": {"index": 1}, "text": body_text}}]}).execute()
+            except Exception as error:
+                raise DocsSubmissionUncertainError() from error
+            return CreatedDocument(document_id, title.strip())
+        except DocsServiceError:
+            raise
+        except Exception as error:
+            raise DocsService._map_error(error) from None
+
+
+class LazyDocsWriteService:
+    """Defers credentials and client resolution until an approved write claim."""
+
+    def __init__(self, factory_supplier: Callable[[], GoogleClientFactory]) -> None:
+        self._factory_supplier = factory_supplier
+
+    def create_private_document(self, title: str, body_text: str) -> CreatedDocument:
+        return DocsWriteService(self._factory_supplier()).create_private_document(title, body_text)
