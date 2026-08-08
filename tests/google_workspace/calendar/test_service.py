@@ -257,6 +257,7 @@ def test_meeting_brief_is_privacy_safe(service: CalendarService, client: MagicMo
     calendar_event = service.search_events(when("2026-08-06T00:00:00Z", "2026-08-07T00:00:00Z")).events[0]
     brief = service.build_meeting_brief(calendar_event, "PRJ-1")
     assert brief.project_reference == "PRJ-1"
+    assert brief.event_id == "event"
     assert not hasattr(brief, "attendees")
 
 
