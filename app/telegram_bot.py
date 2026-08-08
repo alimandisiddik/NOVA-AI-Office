@@ -112,7 +112,7 @@ HELP_MESSAGE: Final = (
     "Perintah NOVA:\n"
     "/start, /help, /status\n"
     "/project, /projects, /task, /tasks, /note, /decision\n"
-    "/capture, /today, /approvals, /shutdown, /morning\n"
+    "/capture, /today, /workitem, /approvals, /shutdown, /morning\n"
     "/dispatch, /dispatches, /dispatchstatus, /approve, /reject, /canceldispatch, /retrydispatch\n"
     "/nightshift, /nightstatus, /nightqueue [cancel <job_id>], /wake\n"
     "/resume, /progress, /continue\n"
@@ -839,16 +839,30 @@ async def capture_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await message.reply_text("Control Tower is temporarily unavailable.")
         return
     raw = _argument_text(context)
-    fields = raw.split(maxsplit=1)
-    if len(fields) != 2:
-        await message.reply_text("Usage: /capture category title")
+    fields = _pipe_fields(raw, 1, 2)
+    if fields is None:
+        await message.reply_text("Usage: /capture category title [| project name]")
+        return
+    category_and_title = fields[0].split(maxsplit=1)
+    if len(category_and_title) != 2:
+        await message.reply_text("Usage: /capture category title [| project name]")
         return
     try:
-        item = service.capture_work(fields[0], fields[1], "telegram")
+        project_id = None
+        if len(fields) == 2:
+            project_name = service._clean_text(fields[1], "Project name", required=True, limit=200)
+            memory = context.application.bot_data.get("memory")
+            if not isinstance(memory, WorkspaceMemoryService):
+                raise ValidationError("Project lookup is unavailable")
+            try:
+                project_id = memory.get_project(project_name or "").id
+            except ProjectNotFoundError as error:
+                raise ValidationError("Project was not found") from error
+        item = service.capture_work(category_and_title[0], category_and_title[1], "telegram", project_id=project_id)
     except Exception as error:
         await _control_tower_error(message, "Capture failed", error)
         return
-    await message.reply_text(f"Captured: {item.title} ({item.item_id[:8]}). Route: {item.recommended_route}.")
+    await message.reply_text(f"Captured: {item.title} ({item.item_id}). Route: {item.recommended_route}.")
 
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -866,7 +880,46 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as error:
         await _control_tower_error(message, "Today view failed", error)
         return
-    lines = ["Today priorities:"] + ([f"• {item.title} — {item.status}" for item in items] or ["• No active priorities."])
+    lines = ["Today priorities:"] + ([
+        f"• {item.title} — Status: {item.status}; Owner: {service.owner_for(item)}; "
+        f"Next action: {service.next_action_for(item)}"
+        for item in items
+    ] or ["• No active priorities."])
+    await message.reply_text(_bounded_message(lines))
+
+async def workitem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    item_id = _argument_text(context)
+    if not item_id:
+        await message.reply_text("Usage: /workitem <item_id>")
+        return
+    try:
+        item = service.repository.get_work_item(item_id)
+        if item is None:
+            raise ValidationError("Work item was not found")
+        dependencies = ", ".join(item.dependencies) if item.dependencies else "None"
+        decisions = service.repository.list_decisions_for_project(item.project_id) if item.project_id is not None else []
+        decisions_text = "; ".join(decision.summary for decision in decisions) if decisions else "None recorded."
+        lines = [
+            f"Work item: {item.title}",
+            f"ID: {item.item_id}",
+            f"Status: {item.status}",
+            f"Owner: {service.owner_for(item)}",
+            f"Next action: {service.next_action_for(item)}",
+            f"Dependencies: {dependencies}",
+            f"Decisions: {decisions_text}",
+        ]
+    except Exception as error:
+        await _control_tower_error(message, "Work item lookup failed", error)
+        return
     await message.reply_text(_bounded_message(lines))
 
 
@@ -1376,6 +1429,7 @@ def build_application(
 
     application.add_handler(CommandHandler("capture", capture_handler))
     application.add_handler(CommandHandler("today", today_handler))
+    application.add_handler(CommandHandler("workitem", workitem_handler))
     application.add_handler(CommandHandler("approvals", approvals_handler))
     application.add_handler(CommandHandler("shutdown", shutdown_handler))
     application.add_handler(CommandHandler("morning", morning_handler))
