@@ -7,7 +7,14 @@ from typing import Any, Callable
 from app.google_workspace.auth import AuthError, GoogleAuthenticator, GoogleDependencyError
 
 
-APPROVED_SERVICES: dict[str, tuple[str, ...]] = {"calendar": ("v3",), "drive": ("v3",)}
+APPROVED_SERVICES: dict[str, tuple[str, ...]] = {
+    "calendar": ("v3",),
+    "drive": ("v3",),
+    "gmail": ("v1",),
+    "docs": ("v1",),
+    "sheets": ("v4",),
+    "slides": ("v1",),
+}
 
 
 def _load_discovery_builder() -> Callable[..., Any]:
