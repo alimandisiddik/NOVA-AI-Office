@@ -39,7 +39,7 @@ class TestFactory(unittest.TestCase):
     def test_factory_rejects_unapproved_service_and_disconnected_state(self) -> None:
         disconnected = GoogleClientFactory(DisconnectedAuthenticator())  # type: ignore[arg-type]
         with self.assertRaisesRegex(GoogleDependencyError, "not approved"):
-            disconnected.get_service("gmail", "v1")
+            disconnected.get_service("contacts", "v1")
         with self.assertRaisesRegex(AuthError, "reconnect required"):
             disconnected.get_service("calendar", "v3")
 
@@ -51,3 +51,11 @@ class TestFactory(unittest.TestCase):
         service = GoogleClientFactory(ConnectedAuthenticator()).get_service("calendar", "v3")  # type: ignore[arg-type]
         self.assertEqual(service, "mock-service")
         build.assert_called_once_with("calendar", "v3", credentials=ANY, cache_discovery=False)
+
+    @patch('app.google_workspace.factory._load_discovery_builder')
+    def test_factory_approves_all_active_read_services(self, mock_load) -> None:
+        build = MagicMock(return_value="mock-service")
+        mock_load.return_value = build
+        factory_instance = GoogleClientFactory(ConnectedAuthenticator())  # type: ignore[arg-type]
+        for service_name, version in (("gmail", "v1"), ("docs", "v1"), ("sheets", "v4"), ("slides", "v1")):
+            assert factory_instance.get_service(service_name, version) == "mock-service"

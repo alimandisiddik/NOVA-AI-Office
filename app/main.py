@@ -30,6 +30,9 @@ from app.providers.specialists.claude_adapter import ClaudeAdapter
 from app.providers.adapter import ProviderAdapter
 from app.providers.repository import ProviderRepository
 from app.providers.service import ProviderGatewayService
+from app.conversation import ConversationService
+from app.google_workspace.bundle import WorkspaceConnectorBundle
+from app.intake import IntakeService
 from app.telegram_bot import build_application
 
 
@@ -161,6 +164,29 @@ def main() -> int:
 
     executive_brief = ExecutiveBriefService(control_tower, night_shift=night_shift, knowledge=knowledge)
 
+    # Workspace OAuth remains optional and must not be probed at startup. The
+    # Stage-1 status handler accepts a missing bundle and reports it safely.
+    google_workspace: WorkspaceConnectorBundle | None = None
+
+    intake = IntakeService(
+        memory.database,
+        memory=memory,
+        control_tower=control_tower,
+        knowledge=knowledge,
+    )
+    try:
+        intake.initialize()
+    except MemoryDatabaseError:
+        logger.error("External message intake schema initialization failed.")
+        return 1
+
+    conversation = ConversationService(memory.database)
+    try:
+        conversation.initialize()
+    except MemoryDatabaseError:
+        logger.error("Conversation schema initialization failed.")
+        return 1
+
     provider_svc: ProviderGatewayService | None = None
 
     if settings.nova_provider_base_url and settings.nova_provider_api_key:
@@ -206,6 +232,9 @@ def main() -> int:
         agent_assignments,
         knowledge,
         executive_brief,
+        google_workspace=google_workspace,
+        intake=intake,
+        conversation=conversation,
     )
     application.run_polling()
     return 0

@@ -367,6 +367,39 @@ class GoogleAuthenticator:
             "client_id_hash": self._client_identity_hash(),
         }
 
+    def get_account_namespace(self) -> str | None:
+        """Return an opaque, stable namespace derived from the authenticated account.
+
+        ``google.oauth2.credentials.Credentials`` does not expose a validated
+        account identifier itself.  The supported Google-auth boundary for this
+        OAuth credential is an authenticated userinfo request, whose ``sub``
+        claim is a stable account identifier.  Any unavailable dependency,
+        invalid credential, or provider failure fails closed as ``None``.
+        """
+        try:
+            credentials = self.get_credentials(require_valid=False)
+            if credentials is None or not getattr(credentials, "valid", False):
+                return None
+            self._validate_credentials(credentials)
+
+            from google.auth.transport.requests import AuthorizedSession
+
+            response = AuthorizedSession(credentials).get(
+                "https://openidconnect.googleapis.com/v1/userinfo", timeout=5
+            )
+            if getattr(response, "status_code", None) != 200:
+                return None
+            payload = response.json()
+            subject = payload.get("sub") if isinstance(payload, dict) else None
+            if not isinstance(subject, str) or not subject.strip():
+                return None
+        except Exception:
+            return None
+
+        return hashlib.sha256(
+            b"nova-google-account-namespace\x00" + subject.encode("utf-8")
+        ).hexdigest()[:12]
+
     def get_audit_trail(self) -> tuple[AuthAuditLog, ...]:
         """Return immutable audit records detached from internal list state."""
         return tuple(self._audit_logs)
