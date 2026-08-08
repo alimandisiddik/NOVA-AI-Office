@@ -22,6 +22,10 @@ from telegram.ext import (
 
 from app.config import Settings
 from app.dissertation.service import DissertationService
+from app.dissertation.repository import (
+    DissertationTargetNotFoundError,
+    InvalidDissertationValueError,
+)
 from app.memory.database import MemoryDatabaseError
 from app.memory.formatters import (
     continue_message,
@@ -120,6 +124,8 @@ HELP_MESSAGE: Final = (
     "/runstatus <id> — cek status execution\n"
     "/cancelrun <id> — batalkan execution\n"
     "/dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]\n"
+    "/dissertation addsource <chapter n|-> | judul | jenis | sitasi | lokator\n"
+    "/dissertation addevidence <source id> | <chapter n|-> | ringkasan | lokator | keyakinan\n"
     "Anda juga dapat memakai bahasa natural sederhana."
 )
 STATUS_MESSAGE: Final = (
@@ -1178,8 +1184,19 @@ async def _nightshift_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 
+def _resolve_chapter_order_token(service: DissertationService, token: str) -> int | None:
+    """Resolve a chapter-order token ('-' for none) to a chapter id."""
+    if token == "-":
+        return None
+    order_index = int(token)
+    chapter = next((item for item in service.list_chapters() if item.order_index == order_index), None)
+    if chapter is None:
+        raise DissertationTargetNotFoundError("Chapter not found")
+    return chapter.id
+
+
 async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Render read-only dissertation workspace views."""
+    """Render dissertation workspace views and accept explicit, structured source/evidence writes."""
     if not await _require_authorized_user(update, context):
         return
     message = update.effective_message
@@ -1232,7 +1249,9 @@ async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             if chapter is None:
                 raise ValueError("Chapter not found")
             evidence = service.list_evidence(chapter_id=chapter.id)
-            lines = [f"Evidence for chapter {order_index}:"] + ([f"• {item.summary}" for item in evidence] or ["• None."])
+            lines = [f"Evidence for chapter {order_index}:"] + (
+                [f"• #{item.id} {item.summary} (source #{item.source_id})" for item in evidence] or ["• None."]
+            )
         elif view == "sources" and len(args) in {1, 2}:
             chapter_id = None
             if len(args) == 2:
@@ -1242,12 +1261,59 @@ async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     raise ValueError("Chapter not found")
                 chapter_id = chapter.id
             sources = service.list_sources(chapter_id=chapter_id)
-            lines = ["Dissertation sources:"] + ([f"• {item.title} — {item.status}" for item in sources] or ["• None."])
+            lines = ["Dissertation sources:"] + (
+                [f"• #{item.id} {item.title} — {item.status}" for item in sources] or ["• None."]
+            )
         elif view == "decisions":
             decisions = service.list_decisions()
             lines = ["Dissertation decisions:"] + ([f"• {item['decision'].summary}" for item in decisions] or ["• None."])
+        elif view == "addsource":
+            actor = f"user:{update.effective_user.id}"
+            fields = _pipe_fields(" ".join(args[1:]), 4, 5)
+            if fields is None:
+                lines = [
+                    "Usage: /dissertation addsource <chapter n|-> | <title> | <source type> | <citation> | <locator>",
+                    "Source types: book, journal_article, thesis, conference_paper, report, website, dataset, other",
+                ]
+            else:
+                chapter_id = _resolve_chapter_order_token(service, fields[0])
+                locator = fields[4] if len(fields) == 5 else None
+                source = service.create_source(
+                    fields[1], fields[2], fields[3], actor, locator=locator, chapter_id=chapter_id
+                )
+                lines = [f"Source created: #{source.id} {source.title} ({source.source_type}, {source.status})"]
+        elif view == "addevidence":
+            actor = f"user:{update.effective_user.id}"
+            fields = _pipe_fields(" ".join(args[1:]), 3, 5)
+            if fields is None:
+                lines = [
+                    "Usage: /dissertation addevidence <source id> | <chapter n|-> | <summary> | <locator> | <confidence>",
+                    "Confidence: LOW, MEDIUM, HIGH (optional, default MEDIUM)",
+                ]
+            else:
+                source_id = int(fields[0])
+                chapter_id = _resolve_chapter_order_token(service, fields[1])
+                locator_detail = fields[3] if len(fields) >= 4 else None
+                confidence = fields[4].strip().upper() if len(fields) == 5 else "MEDIUM"
+                evidence = service.create_evidence(
+                    source_id,
+                    fields[2],
+                    actor,
+                    chapter_id=chapter_id,
+                    locator_detail=locator_detail,
+                    confidence=confidence,
+                )
+                lines = [
+                    f"Evidence created: #{evidence.id} for source #{evidence.source_id} "
+                    f"(confidence: {evidence.confidence})"
+                ]
         else:
-            lines = ["Usage: /dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]"]
+            lines = [
+                "Usage: /dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions"
+                "|addsource ...|addevidence ...]"
+            ]
+    except (InvalidDissertationValueError, DissertationTargetNotFoundError) as error:
+        lines = [str(error)]
     except (ValueError, TypeError):
         lines = ["Invalid dissertation view or chapter number."]
     except Exception:

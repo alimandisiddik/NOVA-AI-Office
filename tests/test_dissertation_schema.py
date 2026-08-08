@@ -206,3 +206,66 @@ def test_initialize_adds_sprint_6a_tables_and_columns(tmp_path: Path) -> None:
 
     assert expected_tables.issubset(tables)
     assert "current_focus" in chapter_columns
+
+
+def test_fresh_evidence_table_has_confidence_column_with_medium_default(tmp_path: Path) -> None:
+    database = MemoryDatabase(tmp_path / "workspace.db")
+    database.initialize()
+    service = DissertationService(database)
+    service.initialize()
+
+    with database.connection() as connection:
+        columns = {
+            row["name"]: row["dflt_value"]
+            for row in connection.execute("PRAGMA table_info(dissertation_evidence)").fetchall()
+        }
+
+    assert "confidence" in columns
+    assert columns["confidence"] == "'MEDIUM'"
+
+
+def test_initialize_adds_confidence_to_a_preexisting_evidence_table(tmp_path: Path) -> None:
+    database = MemoryDatabase(tmp_path / "workspace.db")
+    database.initialize()
+    service = DissertationService(database)
+    service.initialize()
+
+    source = service.create_source("Legacy Source", "book", "Citation", "actor")
+
+    # Simulate a pre-existing Sprint 6A evidence table that predates the confidence column.
+    with database.connection() as connection:
+        connection.execute("DROP TABLE dissertation_evidence")
+        connection.executescript(
+            """
+            CREATE TABLE dissertation_evidence (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER NOT NULL,
+                chapter_id INTEGER,
+                gap_id INTEGER,
+                summary TEXT NOT NULL,
+                locator_detail TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO dissertation_evidence "
+            "(source_id, summary, created_at, updated_at) VALUES (?, ?, 't', 't')",
+            (source.id, "Legacy summary"),
+        )
+
+    service.initialize()
+    service.initialize()  # repeated initialization must not error or duplicate the column
+
+    with database.connection() as connection:
+        rows = [dict(row) for row in connection.execute("SELECT * FROM dissertation_evidence").fetchall()]
+        columns = [
+            row["name"] for row in connection.execute("PRAGMA table_info(dissertation_evidence)").fetchall()
+        ]
+
+    assert len(rows) == 1
+    assert rows[0]["summary"] == "Legacy summary"
+    assert rows[0]["source_id"] == source.id
+    assert rows[0]["confidence"] == "MEDIUM"  # legacy row gets the safe default, not NULL or an error
+    assert columns.count("confidence") == 1

@@ -96,6 +96,7 @@ class Evidence:
     gap_id: int | None
     summary: str
     locator_detail: str | None
+    confidence: str
     created_at: str
     updated_at: str
 

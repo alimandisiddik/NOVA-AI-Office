@@ -157,14 +157,25 @@ class DissertationService:
     def list_sources(self, *, chapter_id: int | None = None) -> list[Source]:
         return self.repository.list_sources(chapter_id=chapter_id)
 
-    def create_evidence(self, source_id: int, summary: str, actor: str, *, chapter_id: int | None = None, gap_id: int | None = None, locator_detail: str | None = None) -> Evidence:
+    def create_evidence(
+        self,
+        source_id: int,
+        summary: str,
+        actor: str,
+        *,
+        chapter_id: int | None = None,
+        gap_id: int | None = None,
+        locator_detail: str | None = None,
+        confidence: str = "MEDIUM",
+    ) -> Evidence:
         actor_clean = self._required(actor, "Actor")
         evidence = self.repository.create_evidence(
             source_id,
             self._safe_required(summary, "Summary", max_length=1000),
             chapter_id=chapter_id,
             gap_id=gap_id,
-            locator_detail=self._safe_optional(locator_detail, max_length=200) if locator_detail else None
+            locator_detail=self._safe_optional(locator_detail, max_length=200) if locator_detail else None,
+            confidence=confidence,
         )
         self.repository.audit("evidence", evidence.id, "created", actor_clean)
         return evidence
