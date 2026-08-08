@@ -106,6 +106,12 @@ def test_source_and_evidence_creation(service: DissertationService) -> None:
 
     evidence = service.create_evidence(source.id, "Summary", "actor1", chapter_id=chapter.id)
     assert evidence.summary == "Summary"
+    assert evidence.confidence == "MEDIUM"  # backward-compatible default for existing/new callers
+
+    confident_evidence = service.create_evidence(
+        source.id, "Strong finding", "actor1", chapter_id=chapter.id, confidence="HIGH"
+    )
+    assert confident_evidence.confidence == "HIGH"
 
 def test_note_creation_and_gap_resolution(service: DissertationService) -> None:
     chapter = service.create_chapter("Ch 1", 1)

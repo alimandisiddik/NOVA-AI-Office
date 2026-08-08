@@ -163,9 +163,40 @@ def test_source_and_evidence(repository: DissertationRepository) -> None:
 
     evidence = repository.create_evidence(source.id, "Summary", chapter_id=chapter.id, gap_id=None, locator_detail="p. 1")
     assert evidence.summary == "Summary"
+    assert evidence.confidence == "MEDIUM"  # backward-compatible default for callers that omit it
 
     ev_list = repository.list_evidence(chapter_id=chapter.id)
     assert len(ev_list) == 1
+
+
+def test_evidence_confidence_accepts_valid_enum_values(repository: DissertationRepository) -> None:
+    source = repository.create_source("Book A", "book", "Citation", None)
+
+    low = repository.create_evidence(source.id, "S1", chapter_id=None, gap_id=None, locator_detail=None, confidence="LOW")
+    medium = repository.create_evidence(source.id, "S2", chapter_id=None, gap_id=None, locator_detail=None, confidence="MEDIUM")
+    high = repository.create_evidence(source.id, "S3", chapter_id=None, gap_id=None, locator_detail=None, confidence="HIGH")
+
+    assert (low.confidence, medium.confidence, high.confidence) == ("LOW", "MEDIUM", "HIGH")
+
+    # Persisted, not just in-memory
+    persisted = repository.get_evidence(high.id)
+    assert persisted.confidence == "HIGH"
+
+
+def test_evidence_confidence_is_normalized_case_insensitively(repository: DissertationRepository) -> None:
+    source = repository.create_source("Book A", "book", "Citation", None)
+    evidence = repository.create_evidence(
+        source.id, "S1", chapter_id=None, gap_id=None, locator_detail=None, confidence="low"
+    )
+    assert evidence.confidence == "LOW"
+
+
+def test_evidence_confidence_rejects_invalid_value(repository: DissertationRepository) -> None:
+    source = repository.create_source("Book A", "book", "Citation", None)
+    with pytest.raises(InvalidDissertationValueError, match="Invalid evidence confidence"):
+        repository.create_evidence(
+            source.id, "S1", chapter_id=None, gap_id=None, locator_detail=None, confidence="EXTREME"
+        )
 
 def test_gap_transitions(repository: DissertationRepository) -> None:
     gap = repository.create_gap("Missing info", "missing_evidence", chapter_id=None)

@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS dissertation_evidence (
     gap_id INTEGER REFERENCES dissertation_gaps(id) ON DELETE SET NULL,
     summary TEXT NOT NULL,
     locator_detail TEXT,
+    confidence TEXT NOT NULL DEFAULT 'MEDIUM'
+        CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -217,6 +219,12 @@ ADD COLUMN version_state TEXT NOT NULL DEFAULT 'original'
 CHECK (version_state IN ('original', 'working', 'reviewed', 'approved'));
 """
 
+EVIDENCE_CONFIDENCE_MIGRATION = """
+ALTER TABLE dissertation_evidence
+ADD COLUMN confidence TEXT NOT NULL DEFAULT 'MEDIUM'
+CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH'));
+"""
+
 
 
 def apply_schema(connection: sqlite3.Connection) -> None:
@@ -243,3 +251,10 @@ def apply_schema(connection: sqlite3.Connection) -> None:
     }
     if "current_focus" not in chapter_columns:
         connection.executescript(CHAPTER_FOCUS_MIGRATION)
+
+    evidence_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(dissertation_evidence)").fetchall()
+    }
+    if "confidence" not in evidence_columns:
+        connection.executescript(EVIDENCE_CONFIDENCE_MIGRATION)

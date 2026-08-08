@@ -94,6 +94,8 @@ GAP_TRANSITIONS = {
     "resolved": frozenset(),
 }
 SOURCE_TYPES = frozenset({"book","journal_article","thesis","conference_paper","report","website","dataset","other"})
+EVIDENCE_CONFIDENCE_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
+DEFAULT_EVIDENCE_CONFIDENCE = "MEDIUM"
 NOTE_TYPES = frozenset({"analysis","synthesis","supervisor_feedback","question","other"})
 GAP_TYPES = frozenset({"missing_evidence","conceptual_weakness","literature_gap","methodological_question","validation_needed","supervisor_feedback","other"})
 AUDIT_TARGET_TYPES = frozenset({"workspace","source","evidence","note","gap","research_task_link","decision_link"})
@@ -481,7 +483,19 @@ class DissertationRepository:
         if row is None:
             raise DissertationTargetNotFoundError("Source not found")
         return _source(row)
-    def create_evidence(self, source_id: int, summary: str, *, chapter_id: int | None, gap_id: int | None, locator_detail: str | None) -> Evidence:
+    def create_evidence(
+        self,
+        source_id: int,
+        summary: str,
+        *,
+        chapter_id: int | None,
+        gap_id: int | None,
+        locator_detail: str | None,
+        confidence: str = DEFAULT_EVIDENCE_CONFIDENCE,
+    ) -> Evidence:
+        confidence = (confidence or DEFAULT_EVIDENCE_CONFIDENCE).strip().upper()
+        if confidence not in EVIDENCE_CONFIDENCE_LEVELS:
+            raise InvalidDissertationValueError("Invalid evidence confidence")
         self.get_source(source_id) # ensure source exists
         if chapter_id is not None:
             self._require_target("chapter", chapter_id)
@@ -494,8 +508,8 @@ class DissertationRepository:
         now = utc_now()
         with self.database.connection() as connection:
             cursor = connection.execute(
-                "INSERT INTO dissertation_evidence (source_id, chapter_id, gap_id, summary, locator_detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (source_id, chapter_id, gap_id, summary, locator_detail, now, now),
+                "INSERT INTO dissertation_evidence (source_id, chapter_id, gap_id, summary, locator_detail, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (source_id, chapter_id, gap_id, summary, locator_detail, confidence, now, now),
             )
             row = connection.execute("SELECT * FROM dissertation_evidence WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _evidence(row)

@@ -105,7 +105,7 @@ mutations.
 
 ## Wave 4 — Sprint 6A Full Dissertation Workspace
 
-Status: Implementation under review / not yet merged
+Status: Completed and merged
 
 Key outcomes:
 
@@ -115,9 +115,62 @@ Key outcomes:
 - Control Tower references for academic work items and decisions;
 - read-only `/dissertation` Telegram workspace views.
 
+
+## Wave 4.1 — Sprint 6B Dissertation Research & Evidence Workflow
+
+Status: Implemented locally; independently reviewed, corrected, and given a
+final corrective pass for evidence confidence. All Sprint 6B acceptance
+criteria are complete — see `docs/SPRINT_6B.md`.
+
+Finding: the source, evidence, gap, and multi-chapter-mapping data model,
+repository, and service layer this sprint's spec calls for were already
+delivered in Sprint 6A's merged `feat: add full dissertation workspace`
+commit (`500664e`), including sensitive-content rejection and additive
+migrations. An independent review found zero application-code changes had
+actually been made under this sprint's branch prior to review — only
+documentation asserted the work as newly done. See `docs/SPRINT_6B.md` for
+the evidence-based acceptance matrix.
+
+Genuinely new in this sprint: the `/dissertation` namespace was read-only.
+The spec requires explicit write capability for adding a source and adding
+evidence from Telegram; that was missing and has been added as
+`/dissertation addsource <chapter n|-> | title | source type | citation |
+locator` and `/dissertation addevidence <source id> | <chapter n|-> |
+summary | locator`, using the same explicit pipe-delimited structured
+syntax as `/task`, `/note`, and `/project` (no conversational parsing).
+Both commands route through the existing `DissertationService.create_source`
+/ `create_evidence` validation (source type, chapter/source existence,
+length bounds, `SENSITIVE_CONTENT_PATTERN` rejection) and the existing
+`_require_authorized_user` gate; no new tables or destructive migrations.
+Read-only source/evidence views were extended to print record IDs
+(additive) so a user can reference a source when adding evidence.
+
+Final corrective pass: the accepted Sprint 6B specification also requires
+evidence confidence and validation, which the review pass above had marked
+missing rather than implementing. Added as a minimal, additive, backward-
+compatible capability: `dissertation_evidence` gains a `confidence` column
+(`LOW`/`MEDIUM`/`HIGH`, `NOT NULL DEFAULT 'MEDIUM'`, `CHECK`-validated),
+delivered via the same `CREATE TABLE IF NOT EXISTS` + `PRAGMA table_info(...)`-
+guarded `ALTER TABLE` pattern already used for `version_state` and
+`current_focus` — a database that already has `dissertation_evidence`
+without the column gets it added with the `MEDIUM` default on next
+`DissertationService.initialize()`; a fresh database gets the column from
+table creation. No destructive migration, no existing row invalidated.
+`DissertationRepository.create_evidence` / `DissertationService.create_evidence`
+accept an optional `confidence` keyword (default `"MEDIUM"`), normalize it
+case-insensitively, and reject any value outside the enum with
+`InvalidDissertationValueError`. `/dissertation addevidence` accepts
+confidence as an optional trailing 5th pipe field (`<source id> | <chapter
+n|-> | <summary> | <locator> | <confidence>`); omitting it uses the
+documented `MEDIUM` default. Nine new tests cover valid enum values,
+case-insensitive normalization, invalid-value rejection, persistence, the
+additive migration against a simulated pre-existing table, and
+backward-compatible defaulting for callers that omit confidence entirely.
+Full regression: 644 passed (635 before this pass + 9 new).
+
 ## Wave 5 — Sprint 5G Multi-Provider Fallback Hardening
 
-Status: Implementation under review / not yet merged
+Status: Completed and merged
 
 Key outcomes:
 
@@ -244,7 +297,7 @@ neutralization, and update-payload non-leakage.
 
 ## Wave 5.2 — Sprint 5G.2 Intent Classification Runtime Fix
 
-Status: Implementation under review / not yet merged.
+Status: Completed and merged.
 
 Root cause: `app/router/classifier.py` treated `"fungsi"` ("function") as
 an undifferentiated technical keyword. A purely informational Telegram
