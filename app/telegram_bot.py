@@ -45,6 +45,8 @@ from app.dispatch.service import DispatchService
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.models import DispatchRequest
 from app.dispatch.errors import DispatchError, DispatchUnavailableError
+from app.agent_assignment.service import AgentAssignmentService
+from app.agent_assignment.errors import AgentAssignmentError
 
 from app.control_tower.repository import ControlTowerError, InvalidCategoryError, ValidationError
 from app.memory.repositories import (
@@ -114,6 +116,7 @@ HELP_MESSAGE: Final = (
     "/project, /projects, /task, /tasks, /note, /decision\n"
     "/capture, /today, /approvals, /shutdown, /morning\n"
     "/dispatch, /dispatches, /dispatchstatus, /approve, /reject, /canceldispatch, /retrydispatch\n"
+    "/assignments, /assignmentstatus <assignment_id>\n"
     "/nightshift, /nightstatus, /nightqueue [cancel <job_id>], /wake\n"
     "/resume, /progress, /continue\n"
     "/route <pesan> — klasifikasi cepat\n"
@@ -811,6 +814,13 @@ def _approval_svc(context: ContextTypes.DEFAULT_TYPE) -> ApprovalService:
     return cast(ApprovalService, svc)
 
 
+def _agent_assignments(context: ContextTypes.DEFAULT_TYPE) -> AgentAssignmentService:
+    svc = context.application.bot_data.get("agent_assignment_svc")
+    if svc is None:
+        raise DispatchUnavailableError("Agent assignment service is unavailable.")
+    return cast(AgentAssignmentService, svc)
+
+
 
 def _bounded_message(lines: list[str], limit: int = 3500) -> str:
     result = "\n".join(lines)
@@ -1008,6 +1018,63 @@ async def handle_dispatchstatus(update: Update, context: ContextTypes.DEFAULT_TY
         ]))
     except Exception as error:
         await _dispatch_reply_error(message, "Dispatch status failed", error)
+
+
+async def _assignment_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Message | None:
+    if not await _require_authorized_user(update, context):
+        return None
+    return update.effective_message
+
+
+async def _assignment_reply_error(message: Message, action: str, error: Exception) -> None:
+    if isinstance(error, AgentAssignmentError):
+        await message.reply_text(f"{action}: check the assignment identifier and try again.")
+        return
+    LOGGER.exception("Unexpected AgentAssignment handler failure")
+    await message.reply_text(f"{action}: temporary problem. Please try again later.")
+
+
+async def handle_assignments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _assignment_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) > 2:
+        await message.reply_text("Usage: /assignments [status]")
+        return
+    try:
+        assignments = _agent_assignments(context).list_assignments(status=parts[1] if len(parts) == 2 else None)
+        lines = ["Assignments:"] + (
+            [
+                f"• {item.assignment_id[:12]} — {item.assigned_agent_id} — {item.status}"
+                for item in assignments
+            ]
+            or ["• No assignments."]
+        )
+        await message.reply_text(_bounded_message(lines))
+    except Exception as error:
+        await _assignment_reply_error(message, "Assignments unavailable", error)
+
+
+async def handle_assignmentstatus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _assignment_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) != 2:
+        await message.reply_text("Usage: /assignmentstatus <assignment_id>")
+        return
+    try:
+        assignment = _agent_assignments(context).get_assignment(parts[1])
+        await message.reply_text(_bounded_message([
+            f"Assignment: {assignment.assignment_id[:12]}",
+            f"Status: {assignment.status}",
+            f"Agent: {assignment.assigned_agent_id}",
+            f"Capability: {assignment.requested_capability}",
+            f"Dispatch: {assignment.dispatch_id[:12] if assignment.dispatch_id else 'not started'}",
+        ]))
+    except Exception as error:
+        await _assignment_reply_error(message, "Assignment status unavailable", error)
 
 
 async def handle_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1333,6 +1400,7 @@ def build_application(
     approvals: ApprovalService | None = None,
     night_worker: NightShiftWorker | None = None,
     dissertation: DissertationService | None = None,
+    agent_assignments: AgentAssignmentService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1346,6 +1414,8 @@ def build_application(
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
         application.bot_data["approval_svc"] = approvals
+    if agent_assignments is not None:
+        application.bot_data["agent_assignment_svc"] = agent_assignments
     if night_worker:
         application.bot_data["night_worker"] = night_worker
     application.bot_data["provider"] = provider
@@ -1394,6 +1464,9 @@ def build_application(
         application.add_handler(CommandHandler("reject", handle_reject))
         application.add_handler(CommandHandler("canceldispatch", handle_canceldispatch))
         application.add_handler(CommandHandler("retrydispatch", handle_retrydispatch))
+    if agent_assignments is not None:
+        application.add_handler(CommandHandler("assignments", handle_assignments))
+        application.add_handler(CommandHandler("assignmentstatus", handle_assignmentstatus))
 
     # Generic text fallback must be registered after every command handler.
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

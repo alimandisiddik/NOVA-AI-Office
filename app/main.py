@@ -18,6 +18,7 @@ from app.dispatch.registry import AgentRegistry
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.service import DispatchService
 from app.dispatch.adapters import ProviderGatewayAgentAdapter
+from app.agent_assignment.service import AgentAssignmentService
 from app.nightshift.worker import NightShiftWorker
 
 from app.providers.errors import ConfigurationError as ProviderConfigurationError
@@ -108,6 +109,18 @@ def main() -> int:
         logger.error("Dispatch Service schema initialization failed.")
         return 1
 
+    agent_assignments = AgentAssignmentService(
+        MemoryDatabase(settings.nova_memory_db_path),
+        registry=registry_svc,
+        dispatch=dispatch_svc,
+        approvals=approval_svc,
+    )
+    try:
+        agent_assignments.initialize()
+    except MemoryDatabaseError:
+        logger.error("Agent Assignment schema initialization failed.")
+        return 1
+
     night_worker = NightShiftWorker(
         service=night_shift,
         dispatch_service=dispatch_svc,
@@ -165,7 +178,10 @@ def main() -> int:
             provider_svc = None
             ProviderGatewayAgentAdapter.set_service_factory(lambda: None)
 
-    application = build_application(settings, memory, execution_svc, provider_svc, night_shift, control_tower, dispatch_svc, approval_svc, night_worker, dissertation)
+    application = build_application(
+        settings, memory, execution_svc, provider_svc, night_shift, control_tower,
+        dispatch_svc, approval_svc, night_worker, dissertation, agent_assignments,
+    )
     application.run_polling()
     return 0
 
