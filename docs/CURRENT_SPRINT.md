@@ -1,5 +1,35 @@
 # CURRENT SPRINT
 
+## Wave 6 — Sprint 7E Executive Dashboard Skeleton
+
+Status: Implemented locally; independently reviewed and corrected.
+
+The dashboard is a standalone, default-off, localhost-only read layer. It
+composes bounded canonical NOVA state through existing services and provides no
+write controls, persistence, background work, or provider/network dependency.
+
+Independent review found the approval/blocker panel used a local
+`list_approvals()` façade that called only `control_tower_approval_links`
+directly, silently omitting the other four sources the canonical
+`ControlTowerService.list_approvals()` aggregation folds in (work items
+awaiting approval, executions, Night Shift jobs, dispatch approvals) — a
+correctness defect on the panel this dashboard exists to get right, not an
+acceptable deviation. Corrected by removing the façade and composing the
+Executive Brief panel through the real, canonical `list_approvals()`
+(reached via `ExecutiveBriefService.generate_morning_brief()`), and by wiring
+a read-only `ApprovalService` into the dashboard's own `ControlTowerService`
+instance so the dispatch-approval source is actually reachable. This trades
+one documented `control_tower_audit_log` append per page load (identical to
+existing `/morning`/`/execbrief` behavior) for a complete, non-duplicated
+approvals view — see `docs/executive-dashboard.md`. `app/config.py`/
+`.env.example` additions (`NOVA_DASHBOARD_ENABLED`, `NOVA_DASHBOARD_PORT`)
+were verified as the minimal, additive, non-coupling settings the frozen
+contract requires; `app/main.py` remains untouched (`git diff` empty); the
+loopback bind (`127.0.0.1`) is hard-coded with no host override path.
+Test suite grown from 5 to 13 dashboard tests (regression: 750 → 758
+passing) to cover import side effects, GET-only route enforcement, terminal
+assignment exclusion, bounded lists, and provider-absent rendering.
+
 ## Wave 1 — Completed
 
 ### Sprint 5A — Always-On Runtime
