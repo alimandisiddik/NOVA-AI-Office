@@ -456,3 +456,106 @@ acceptable deviation — corrected as follows:
 
 Full regression re-run after the fix; see the review record for the exact
 pass count.
+
+## Wave 7 — Executive Operations & Workspace Automation (architecture frozen, pending final Control Tower sign-off)
+
+Status: Architecture/contracts FROZEN by Claude (Technical Architect),
+revised twice — first to cover the full target Workspace surface, then per
+a Control Tower Freeze Review covering four specific issues (Stage 1
+bootstrap wiring ownership, Google Keep placed on hold, Workspace
+provenance identity, and an explicit active-service matrix). Not yet
+implemented. No application code was written for either pass.
+
+Shared-contract design for seven sprints — 8A (Workspace Connector
+Foundation), 8B (Inbox & Calendar Intelligence), 8C (Drafting & Document
+Operations), 8D (Workspace → Control Tower Integration), 8E
+(Approval-Gated Workspace Actions), 8F (`/wa` External Message Intake), 8G
+(Conversational Control & Contextual Confirmation) — is complete and frozen.
+See `docs/WAVE_7_SHARED_CONTRACTS.md` for the full contract evaluation,
+architecture decisions AD-W7-01…17, ownership matrix, OAuth/read-write scope
+policy across the **active** six-service Workspace matrix (Gmail/Calendar/
+Drive/Docs/Sheets/Slides), security classification, and the Telegram/
+`app/main.py` integration mechanism, and `docs/SPRINT_8A.md` through
+`docs/SPRINT_8G.md` for each sprint's full spec.
+
+Grounding: before any Wave 7 contract was proposed, the existing Sprint
+5C/5D/5E Google Workspace foundation (`app/google_workspace/**` — OAuth
+desktop flow, secure local token storage, read-only Calendar and Drive
+services) was read in full. It is reused, not reinvented — Gmail, Docs,
+Sheets, and Slides are the net-new API surfaces Wave 7 adds; Contacts is
+documented but deliberately not implemented (no frozen sprint's user-facing
+capability needs it), and **Google Keep is deferred and out of active
+Wave 7 scope entirely** (Control Tower directive — see AD-W7-14). That
+foundation was built but never wired into `app/main.py`/`app/telegram_bot.py`.
+
+Execution order (frozen dependency graph, four stages, each closed by a
+named integration gate before the next begins — G1–G4, see
+`docs/WAVE_7_SHARED_CONTRACTS.md` §12):
+
+```
+Stage 1 (parallel): 8A, 8F, 8G           -> Stage 1 Integration Gate (G1)
+Stage 2:            8B (reads 8A)         -> Stage 2 Integration Gate (G2)
+Stage 3 (parallel): 8C, 8D (read 8A/8B)   -> Stage 3 Integration Gate (G3)
+Stage 4:            8E (reads 8A/8C/8D)   -> Final Wave 7 Integration (G4)
+```
+
+**Revised this pass — Stage 1 bootstrap wiring ownership (AD-W7-10):** the
+originally-frozen "fixed append order" (8A→8F→8G each independently
+appending a parameter to `build_application()`) was found insufficient
+isolation for true parallel Git work. 8A/8F/8G now own only their own
+packages and tests; none of the three edits `app/main.py` or
+`build_application()`'s function signature. The **G1 integration branch**
+owns constructing all three services in `app/main.py`, adding their three
+parameters to `build_application()` in one coordinated pass, wiring
+`bot_data`, and validating final handler ordering — modeled directly on
+Wave 6's own proven `tests/test_wave6_integration.py` precedent. 8G's
+`handle_text` body edit remains 8G's own direct, zero-collision edit,
+unchanged.
+
+**Revised this pass — Google Keep (AD-W7-14):** Keep is **on hold, deferred,
+and out of active Wave 7 scope** by explicit Control Tower decision. 8A
+implements no Keep package, probe, or scope; 8C has no Keep content type;
+8E has no Keep action type or write service; no Wave 7 acceptance criterion,
+test, or integration gate references Keep as an active capability. The
+active Wave 7 Google Workspace scope is exactly six services: Gmail,
+Calendar, Drive, Docs, Sheets, Slides (explicit matrix in
+`docs/WAVE_7_SHARED_CONTRACTS.md` §5a). Keep may be revisited in a future
+wave only after documentation verification, account-eligibility
+verification, a use-case-suitability case, and a separate architecture
+decision — all four required.
+
+**Revised this pass — Workspace provenance identity (AD-W7-17):** 8D's
+`WorkspaceSourceRef` no longer keys deduplication on a content hash alone —
+identity is now `(source_system, account_namespace, external_source_type,
+external_source_id)`, the real Gmail/Calendar/Drive object identifier
+scoped to the configured account, with a content fingerprint retained only
+as a secondary, non-unique hint. 8F's `ExternalMessageIntake` uses a
+two-tier model instead: a permanent idempotency key on Telegram's own
+`telegram_update_id` where available (true duplicate-delivery protection),
+and a scoped, time-bounded content-fingerprint hint for accidental
+double-pastes — never a permanent content-only key, since WhatsApp gives
+NOVA no stable native message identity and two distinct messages may
+legitimately share identical short text.
+
+Other key decisions (unchanged from the prior pass): read scopes ship in
+Stages 1–3 only, write scopes ship only with 8E (AD-W7-02); a real
+Google-side write — including a Gmail draft or a Docs/Sheets/Slides
+mutation — always counts as an external write, so 8C prepares local-only
+`PreparedWorkspaceAction` content and 8E alone performs the real write
+(AD-W7-05); 8E closes the Wave 6-documented `GEMINI`/Workspace
+dispatch-adapter gap (AD-W6-06) by extending `workspace_agent`'s capability
+and giving it a real adapter, reusing `DispatchService`/`ApprovalService`
+verbatim (AD-W7-04); contextual replies (`oke`/`ya`/etc.) can never
+authorize a high-risk action — only an explicit numbered/labeled reply can
+(AD-W7-09); `/wa` never talks to WhatsApp in any direction, permanently
+(AD-W7-06/07); Contacts ships as a documented interface only, never a
+blocker (AD-W7-13); Google Workspace connector execution never depends on
+an LLM/provider, and Gemini is a reasoning role consuming already-safely-
+read DTOs, never the OAuth/credential owner (AD-W7-15/16). Wave 7
+introduces no new persisted duplicate of `WorkItem`, `Decision`,
+`AgentAssignment`, `KnowledgeItem`, or `KnowledgeSource`.
+
+No secrets were accessed, no runtime Google OAuth authentication was
+performed, no external Google API action was performed, and no
+implementation code was added during either architecture pass — `git diff`
+against both passes is documentation-only.
