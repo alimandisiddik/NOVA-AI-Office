@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -54,7 +55,7 @@ from app.memory.repositories import (
 )
 from app.memory.services import WorkspaceMemoryService
 from app.natural_language import WorkspaceIntent, parse_workspace_intent
-from app.security import is_authorized_user
+from app.security import SENSITIVE_CONTENT_PATTERN, is_authorized_user
 from app.router.planner import (
     format_plan,
     format_route,
@@ -81,6 +82,21 @@ from app.execution.formatters import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Sprint 5G.4: word-boundary supplement to SENSITIVE_CONTENT_PATTERN for a
+# runtime error message. The shared pattern already covers "api key",
+# "private key", "password", "credential", and "KEY=value" assignment
+# shapes; it deliberately does NOT match a bare "key" (too many legitimate
+# non-secret uses, e.g. "duplicate primary key"), so a bare "key" mention
+# alone is not redacted here either. "token"/"secret" alone have no such
+# common legitimate use in an error message, so they are redacted as a
+# supplement to the shared pattern.
+_ERROR_SENSITIVE_KEYWORD_PATTERN = re.compile(r"\b(?:token|secret)\b", re.IGNORECASE)
+# Strips ASCII control characters (newlines, carriage returns, tabs, etc.)
+# so an attacker/upstream-controlled exception message can never forge
+# additional log lines or corrupt log parsing.
+_CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f]")
+_ERROR_MESSAGE_MAX_LENGTH = 500
 
 UNAUTHORIZED_MESSAGE: Final = "Akses ditolak. NOVA adalah AI Office pribadi."
 START_MESSAGE: Final = (
@@ -728,9 +744,43 @@ async def providerstatus_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Record a generic failure without leaking update data, credentials, or tokens."""
-    del update, context
-    LOGGER.error("Unhandled Telegram bot error.")
+    """Record a generic failure without leaking update data, credentials, or tokens.
+
+    ``update`` is never read or logged -- it is the one object guaranteed to
+    carry real chat/user content. This is the bot's last-resort error
+    handler, so it must never itself raise: a malformed/missing ``context``,
+    a missing/None ``context.error``, or an exception whose own ``__str__``
+    raises must all fall back to a safe, generic log line rather than
+    propagate.
+    """
+    del update
+    try:
+        error = getattr(context, "error", None)
+        if error is None:
+            LOGGER.error("Unhandled Telegram bot error.")
+            return
+
+        error_type = type(error).__name__
+        try:
+            error_msg = str(error)
+        except Exception:
+            error_msg = "<error message unavailable>"
+
+        # Match on the raw message first: SENSITIVE_CONTENT_PATTERN's
+        # "^KEY=value"-shaped alternative relies on real line starts, which
+        # control-character stripping below would otherwise disturb.
+        if SENSITIVE_CONTENT_PATTERN.search(error_msg) or _ERROR_SENSITIVE_KEYWORD_PATTERN.search(error_msg):
+            LOGGER.error("Unhandled Telegram bot error (%s): [REDACTED SENSITIVE CONTENT]", error_type)
+            return
+
+        # Neutralize newlines/control characters (log-injection defense)
+        # before bounding length; length is judged on the original message.
+        safe_msg = _CONTROL_CHAR_PATTERN.sub(" ", error_msg)[:_ERROR_MESSAGE_MAX_LENGTH]
+        if len(error_msg) > _ERROR_MESSAGE_MAX_LENGTH:
+            safe_msg += "..."
+        LOGGER.error("Unhandled Telegram bot error (%s): %s", error_type, safe_msg)
+    except Exception:
+        LOGGER.error("Unhandled Telegram bot error.")
 
 
 
