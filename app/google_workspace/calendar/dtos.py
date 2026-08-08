@@ -68,6 +68,7 @@ class MeetingBrief:
     organizer_alias: Optional[str] = None
     conference_provider: Optional[str] = None
     project_reference: Optional[str] = None
+    event_id: Optional[str] = None
 
     @property
     def start(self) -> datetime:

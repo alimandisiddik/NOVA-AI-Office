@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from app.memory.services import WorkspaceMemoryService
 
 
-SOURCE_TYPES = frozenset({"document", "note", "drive_file", "calendar_event", "manual", "conversation"})
+SOURCE_TYPES = frozenset({"document", "note", "drive_file", "calendar_event", "gmail_message", "manual", "conversation"})
 ORIGIN_SYSTEMS = frozenset({"manual", "google_drive", "google_calendar", "dissertation", "telegram"})
 CONFIDENCE_LEVELS = frozenset({"LOW", "MEDIUM", "HIGH"})
 MAX_TITLE_LENGTH = 500

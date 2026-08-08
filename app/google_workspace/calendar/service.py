@@ -273,6 +273,7 @@ class CalendarService:
             organizer_alias=event.organizer_alias,
             conference_provider=event.conference_provider,
             project_reference=project_reference,
+            event_id=event.id,
         )
 
     def prepare_event_draft(
