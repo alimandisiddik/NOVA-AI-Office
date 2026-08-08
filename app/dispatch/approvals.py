@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from app.dispatch.errors import ApprovalAuthorizationError, InvalidRequestError, InvalidTransitionError, StaleUpdateError
@@ -19,10 +20,18 @@ _SENSITIVE_APPROVAL_TEXT = re.compile(r"(?:ssh-(?:rsa|ed25519)|-----BEGIN)", re.
 
 
 class ApprovalService:
-    def __init__(self, database: MemoryDatabase, *, authorized_user_id: int) -> None:
+    def __init__(self, database: MemoryDatabase, *, authorized_user_id: int, clock: Callable[[], str] = utc_now) -> None:
         self.database = database
         self.repository = DispatchRepository(database)
         self.authorized_user_id = authorized_user_id
+        self._clock = clock
+
+    def _now(self) -> str:
+        value = self._clock()
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+            raise InvalidRequestError("Approval clock must return UTC timestamps.")
+        return value
 
     def initialize(self) -> None:
         try:
@@ -54,7 +63,7 @@ class ApprovalService:
             existing = self.repository.get_open_approval_in(connection, dispatch_id)
             if existing is not None:
                 return existing
-            approval = ApprovalRequest(str(uuid.uuid4()), dispatch_id, action, "requested", actor, utc_now(), expires_at=expires_at)
+            approval = ApprovalRequest(str(uuid.uuid4()), dispatch_id, action, "requested", actor, self._now(), expires_at=expires_at)
             self.repository.insert_approval_in(connection, approval, actor)
             return approval
 
@@ -68,11 +77,15 @@ class ApprovalService:
             dispatch = self.repository.get_dispatch_in(connection, approval.dispatch_id)
             if approval.status != "requested" or dispatch.status != "awaiting_approval":
                 raise StaleUpdateError("Approval is no longer pending.")
+            if approval.expires_at and datetime.fromisoformat(approval.expires_at) <= datetime.fromisoformat(self._now()):
+                if self.repository.transition_approval_in(connection, approval_id, "requested", "expired", actor):
+                    self.repository.transition_dispatch_in(connection, dispatch.dispatch_id, "awaiting_approval", "rejected", actor, event="approval_expired")
+                raise StaleUpdateError("Approval has expired.")
             if not self.repository.transition_approval_in(connection, approval_id, "requested", "approved", actor):
                 raise StaleUpdateError("Approval update is stale.")
             if not self.repository.transition_dispatch_in(connection, dispatch.dispatch_id, "awaiting_approval", "approved", actor, event="approval_granted"):
                 raise StaleUpdateError("Dispatch update is stale.")
-            return ApprovalDecision(approval_id, dispatch.dispatch_id, "approved", actor, utc_now())
+            return ApprovalDecision(approval_id, dispatch.dispatch_id, "approved", actor, self._now())
 
     def reject(self, approval_id: str, approving_user_id: int, reason: str) -> ApprovalDecision:
         if approving_user_id != self.authorized_user_id:
@@ -89,7 +102,7 @@ class ApprovalService:
                 raise StaleUpdateError("Approval update is stale.")
             if not self.repository.transition_dispatch_in(connection, dispatch.dispatch_id, "awaiting_approval", "rejected", actor, event="approval_rejected", detail=safe_reason):
                 raise StaleUpdateError("Dispatch update is stale.")
-            return ApprovalDecision(approval_id, dispatch.dispatch_id, "rejected", actor, utc_now())
+            return ApprovalDecision(approval_id, dispatch.dispatch_id, "rejected", actor, self._now())
 
     def get_approval(self, approval_id: str) -> ApprovalRequest:
         return self.repository.get_approval(approval_id)
@@ -107,10 +120,10 @@ class ApprovalService:
             dispatch = self.repository.get_dispatch_in(connection, approval.dispatch_id)
             if dispatch.status == "cancelled":
                 target = "cancelled"
-            elif approval.expires_at and datetime.fromisoformat(approval.expires_at) <= datetime.now(timezone.utc):
+            elif approval.expires_at and datetime.fromisoformat(approval.expires_at) <= datetime.fromisoformat(self._now()):
                 target = "expired"
             else:
                 raise InvalidTransitionError("Approval cannot be closed yet.")
             if not self.repository.transition_approval_in(connection, approval_id, "requested", target, actor, safe_reason):
                 raise StaleUpdateError("Approval update is stale.")
-            return ApprovalDecision(approval_id, approval.dispatch_id, target, actor, utc_now())
+            return ApprovalDecision(approval_id, approval.dispatch_id, target, actor, self._now())

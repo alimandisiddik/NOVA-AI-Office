@@ -63,6 +63,13 @@ class DraftingService:
     def prepare_docs_memo(self, title: str, instructions: str, actor: str) -> PreparedWorkspaceAction:
         return self._create_text_action("docs_memo", None, self._text(title, "title", 200), instructions, actor)
 
+    def get_current_ready_action(self, action_id: int) -> PreparedWorkspaceAction | None:
+        """Public 8C freshness seam for approved external-action execution."""
+        if not isinstance(action_id, int) or isinstance(action_id, bool) or action_id < 1:
+            return None
+        with self.database.connection() as connection:
+            return self.repository.get_current_ready_action_in(connection, action_id)
+
     def prepare_sheets_change(
         self, source_file_id: str, a1_range: str, instructions: str, actor: str
     ) -> PreparedWorkspaceAction:

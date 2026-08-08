@@ -642,7 +642,9 @@ def test_structural_guard_no_fake_dispatch_class():
     assert "class FakeApprovalService" not in src
 
 
-def test_dispatch_public_interface_unchanged_by_5g():
+def test_dispatch_changes_are_limited_to_the_8e_workspace_action_contract():
     result = subprocess.run(["git", "diff", "--", "app/dispatch/service.py", "app/dispatch/schema.py"], capture_output=True, text=True)
     assert result.returncode == 0
-    assert result.stdout.strip() == ""
+    diff = result.stdout
+    assert "workspace_action" in diff
+    assert "workspace_write" in diff

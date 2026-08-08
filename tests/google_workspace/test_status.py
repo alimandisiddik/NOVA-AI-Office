@@ -43,7 +43,7 @@ def test_workspace_packages_and_main_import_without_configuration() -> None:
     assert get_workspace_capability_report().connection["is_connected"] is False
 
 
-def test_workspace_source_exposes_no_write_calls_or_deferred_service() -> None:
+def test_workspace_source_exposes_only_the_narrow_docs_write_boundary() -> None:
     workspace_root = Path("app/google_workspace")
     all_source = "\n".join(path.read_text(encoding="utf-8") for path in workspace_root.rglob("*.py"))
     assert "keep" not in all_source.lower()
@@ -54,11 +54,13 @@ def test_workspace_source_exposes_no_write_calls_or_deferred_service() -> None:
     )
     lowered = source.lower()
     for operation in (
-        ".send(", ".modify(", ".trash(", ".batchupdate(",
+        ".send(", ".modify(", ".trash(",
         ".values().append(", ".values().update(", ".values().clear(",
-        ".delete(", ".create(", ".patch(", ".insert(",
+            ".delete(", ".patch(", ".insert(",
     ):
         assert operation not in lowered
+    assert lowered.count(".batchupdate(") == 1
+    assert lowered.count(".create(") == 1
     assert "app.providers" not in source
 
 

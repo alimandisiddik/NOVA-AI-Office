@@ -98,6 +98,7 @@ from app.google_workspace.telegram import workspacestatus_command
 from app.workspace_intel import WorkspaceIntelService
 from app.workspace_bridge import WorkspaceBridgeService
 from app.workspace_bridge.telegram import workspacecandidates_command, workspacecommit_command
+from app.workspace_actions.telegram import createdoc_command, docstatus_command
 from app.intake import IntakeService
 from app.intake.telegram import wa_command, waconfirm_command
 from app.execution.formatters import (
@@ -1332,6 +1333,12 @@ async def handle_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("Usage: /approve <approval_id>")
         return
     try:
+        workspace_actions = context.application.bot_data.get("workspace_actions")
+        if workspace_actions is not None:
+            action = workspace_actions.approve_and_execute(parts[1], update.effective_user.id, chat_id=str(getattr(getattr(update, "effective_chat", None), "id", "")))
+            if action is not None:
+                await message.reply_text(f"Approval recorded. {action.status}.")
+                return
         decision = _approval_svc(context).approve(parts[1], update.effective_user.id)
         record = _dispatch_svc(context).dispatch(decision.dispatch_id, f"user:{update.effective_user.id}")
         await message.reply_text(_bounded_message([f"Approval recorded. Dispatch: {record.status}. "]))
@@ -1348,6 +1355,12 @@ async def handle_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text("Usage: /reject <approval_id> [reason]")
         return
     try:
+        workspace_actions = context.application.bot_data.get("workspace_actions")
+        if workspace_actions is not None:
+            action = workspace_actions.reject(parts[1], update.effective_user.id, parts[2] if len(parts) == 3 else "", chat_id=str(getattr(getattr(update, "effective_chat", None), "id", "")))
+            if action is not None:
+                await message.reply_text(f"Workspace action #{action.id}: {action.status}.")
+                return
         _approval_svc(context).reject(parts[1], update.effective_user.id, parts[2] if len(parts) == 3 else "")
         await message.reply_text("Approval rejected.")
     except Exception as error:
@@ -1746,6 +1759,7 @@ def build_application(
     conversation: ConversationService | None = None,
     drafting: DraftingService | None = None,
     workspace_bridge: WorkspaceBridgeService | None = None,
+    workspace_actions: object | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1763,6 +1777,7 @@ def build_application(
     application.bot_data["conversation"] = conversation
     application.bot_data["drafting"] = drafting
     application.bot_data["workspace_bridge"] = workspace_bridge
+    application.bot_data["workspace_actions"] = workspace_actions
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1825,6 +1840,8 @@ def build_application(
     application.add_handler(CommandHandler("draft", draft_command))
     application.add_handler(CommandHandler("workspacecandidates", workspacecandidates_command))
     application.add_handler(CommandHandler("workspacecommit", workspacecommit_command))
+    application.add_handler(CommandHandler("createdoc", createdoc_command))
+    application.add_handler(CommandHandler("docstatus", docstatus_command))
 
     if dispatch is not None:
         application.add_handler(CommandHandler("dispatch", handle_dispatch))

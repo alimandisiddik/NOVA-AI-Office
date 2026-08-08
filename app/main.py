@@ -33,10 +33,15 @@ from app.providers.service import ProviderGatewayService
 from app.conversation import ConversationService
 from app.drafting import DraftingService
 from app.google_workspace.bundle import WorkspaceConnectorBundle
+from app.google_workspace.auth import GoogleAuthenticator, SecureFileTokenStorage
+from app.google_workspace.docs import LazyDocsWriteService
+from app.google_workspace.factory import GoogleClientFactory
+from app.google_workspace.scopes import ScopeBundle
 from app.intake import IntakeService
 from app.telegram_bot import build_application
 from app.workspace_bridge import WorkspaceBridgeService
 from app.workspace_intel import WorkspaceIntelService
+from app.workspace_actions import UnavailableDocsWriter, WorkspaceActionService
 
 
 class _UnavailableWorkspaceAuthenticator:
@@ -44,6 +49,20 @@ class _UnavailableWorkspaceAuthenticator:
 
     def get_account_namespace(self) -> None:
         return None
+
+
+def _docs_writer_for_settings(settings: Settings):
+    """Construct a lazy, canonical Docs writer without reading credentials."""
+    if not settings.google_client_secrets_path or not settings.google_token_storage_path:
+        return UnavailableDocsWriter()
+    authenticator = GoogleAuthenticator(
+        settings.google_client_secrets_path,
+        SecureFileTokenStorage(settings.google_token_storage_path),
+        ScopeBundle.DOCS_WRITE.value,
+        settings.google_oauth_port,
+    )
+    client_factory = GoogleClientFactory(authenticator)
+    return LazyDocsWriteService(lambda: client_factory)
 
 
 def configure_logging() -> None:
@@ -183,6 +202,21 @@ def main() -> int:
         logger.error("Drafting schema initialization failed.")
         return 1
 
+    docs_writer = _docs_writer_for_settings(settings)
+
+    workspace_actions = WorkspaceActionService(
+        memory.database,
+        drafting=drafting,
+        dispatch=dispatch_svc,
+        approvals=approval_svc,
+        docs_writer=docs_writer,
+    )
+    try:
+        workspace_actions.initialize()
+    except MemoryDatabaseError:
+        logger.error("Workspace action schema initialization failed.")
+        return 1
+
     workspace_bridge = WorkspaceBridgeService(
         memory.database,
         google_workspace.authenticator if google_workspace is not None else _UnavailableWorkspaceAuthenticator(),
@@ -273,6 +307,7 @@ def main() -> int:
         conversation=conversation,
         drafting=drafting,
         workspace_bridge=workspace_bridge,
+        workspace_actions=workspace_actions,
     )
     application.run_polling()
     return 0
