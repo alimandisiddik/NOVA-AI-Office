@@ -22,6 +22,7 @@ from app.memory.database import MemoryDatabase, MemoryDatabaseError
 from app.security import SENSITIVE_CONTENT_PATTERN
 
 if TYPE_CHECKING:
+    from app.agent_assignment.service import AgentAssignmentService
     from app.execution.service import ExecutionService
     from app.nightshift.service import NightShiftService
 
@@ -51,12 +52,14 @@ ROUTES = {
 
 class ControlTowerService:
     def __init__(self, database: MemoryDatabase, *, execution: 'ExecutionService | None' = None,
-                 night_shift: 'NightShiftService | None' = None, approvals: 'ApprovalService | None' = None) -> None:
+                 night_shift: 'NightShiftService | None' = None, approvals: 'ApprovalService | None' = None,
+                 agent_assignments: 'AgentAssignmentService | None' = None) -> None:
         self.database = database
         self.repository = ControlTowerRepository(database)
         self.execution = execution
         self.night_shift = night_shift
         self.approvals = approvals
+        self.agent_assignments = agent_assignments
 
     def initialize(self) -> None:
         try:
@@ -162,6 +165,28 @@ class ControlTowerService:
     def unresolved_blocker_count(self, item: WorkItem) -> int:
         # completed and cancelled dependencies are resolved; every other state blocks.
         return sum(status not in {"completed", "cancelled"} for status in self.repository.dependency_statuses(item.item_id))
+
+    def owner_for(self, item: WorkItem) -> str:
+        if self.agent_assignments is not None:
+            assignment = self.agent_assignments.get_active_assignment_summary(item.item_id)
+            if assignment is not None:
+                return assignment.assigned_agent_id
+        return item.recommended_route or "Unassigned"
+
+    def next_action_for(self, item: WorkItem) -> str:
+        if item.status == "clarification_needed":
+            return f"Resolve clarification: {item.clarification_needs or 'Clarification required'}"
+        if item.status == "awaiting_approval":
+            return "Awaiting approval"
+        if item.status in {"inbox", "planned"}:
+            if self.unresolved_blocker_count(item) > 0:
+                return "Blocked on dependencies"
+            return f"Assign to {item.recommended_route or 'an agent'}"
+        if item.status == "in_progress":
+            return "In progress"
+        if item.status == "deferred":
+            return "Deferred — reschedule or cancel"
+        return "No action required"
 
     def priority_score(self, item: WorkItem, *, now: datetime | None = None) -> int:
         score = item.urgency * 2 + item.importance * 3

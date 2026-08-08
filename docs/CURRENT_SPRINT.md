@@ -341,3 +341,53 @@ frozen with a narrow, named read interface between them
 (`get_active_assignment_summary()`), documented in `docs/WAVE_6_SHARED_CONTRACTS.md`
 AD-W6-01. No application code has been written — this entry records
 architecture preparation only.
+
+## Wave 6 — Integration review (7A + 7B + 7D combined)
+
+Status: 7A (Executive Workflow), 7B (Knowledge Operations), and 7D (Agent
+Registry & Assignment) individually reviewed and merged onto
+`integration/wave6-core`; independent cross-sprint integration review
+completed on the combined branch.
+
+- 7A reviewed: `owner_for()`/`next_action_for()` verified against a real
+  `AgentAssignmentService` (not only the stub used by 7A's own tests);
+  unassigned/terminal-assignment fallback confirmed safe;
+  `control_tower.agent_assignments=None` (7D absent) still derives owner
+  correctly.
+- 7B reviewed: `KnowledgeService` confirmed to write only its own additive
+  tables, read `memory`/`control_tower` state only through existing public
+  read methods, apply `SENSITIVE_CONTENT_PATTERN` before every write, and
+  perform no network calls.
+- 7D reviewed: `AgentAssignmentService` confirmed to route all execution
+  exclusively through `DispatchService`/`ApprovalService` (no raw SQL
+  against `dispatches`/`approvals`); `get_active_assignment_summary()`
+  confirmed to exclude terminal assignments (`completed`/`cancelled`/
+  `reassigned`) from the active-owner read path.
+- Integration branch combined: `app/main.py` initialization order verified
+  (memory → execution → night_shift → registry → approvals → dispatch →
+  agent_assignments → control_tower(agent_assignments=...) → dissertation →
+  knowledge → provider → Telegram application), no service dropped or
+  double-initialized; `app/telegram_bot.py` verified to register every
+  7A/7D/7B command exactly once, `HELP_MESSAGE` lists all of them, and the
+  generic text fallback stays registered after every command handler.
+- One integration defect fixed: `app/control_tower/service.py` was missing
+  the `TYPE_CHECKING`-only import of `AgentAssignmentService` for its
+  optional constructor parameter's forward-reference annotation (present
+  for `ExecutionService`/`NightShiftService` but not added when the 7D
+  injection point landed) — added, no behavior change.
+- New cross-sprint integration tests added:
+  `tests/test_wave6_integration.py` — real (non-stub)
+  `AgentAssignmentService` + `ControlTowerService` wiring, `build_application()`
+  carrying all three sprints' services and handlers, combined idempotent
+  initialization against one temporary SQLite database, and a structural
+  check that `app/knowledge/` never references `agent_assignments`/
+  `control_tower_work_items`.
+- Combined regression result: 734 passed (723 pre-review baseline + 11 new
+  Wave 6 integration tests), no failures, no skips.
+- Merge intentionally left uncommitted per the review's operating
+  constraints — no commit, merge, or push performed by this review.
+
+Next dependency stage: **7C (Morning Executive Brief)**, which reads 7A's
+`owner_for()`/`next_action_for()` and 7D's `get_active_assignment_summary()`
+once this branch is accepted, per `docs/WAVE_6_SHARED_CONTRACTS.md` §5's
+integration order (7A/7B/7D → 7C → 7E).

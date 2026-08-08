@@ -26,6 +26,8 @@ from app.dissertation.repository import (
     DissertationTargetNotFoundError,
     InvalidDissertationValueError,
 )
+from app.knowledge.service import InvalidKnowledgeValueError, KnowledgeService
+from app.knowledge.repository import KnowledgeError
 from app.memory.database import MemoryDatabaseError
 from app.memory.formatters import (
     continue_message,
@@ -45,6 +47,8 @@ from app.dispatch.service import DispatchService
 from app.dispatch.approvals import ApprovalService
 from app.dispatch.models import DispatchRequest
 from app.dispatch.errors import DispatchError, DispatchUnavailableError
+from app.agent_assignment.service import AgentAssignmentService
+from app.agent_assignment.errors import AgentAssignmentError
 
 from app.control_tower.repository import ControlTowerError, InvalidCategoryError, ValidationError
 from app.memory.repositories import (
@@ -112,8 +116,9 @@ HELP_MESSAGE: Final = (
     "Perintah NOVA:\n"
     "/start, /help, /status\n"
     "/project, /projects, /task, /tasks, /note, /decision\n"
-    "/capture, /today, /approvals, /shutdown, /morning\n"
+    "/capture, /today, /workitem, /approvals, /shutdown, /morning\n"
     "/dispatch, /dispatches, /dispatchstatus, /approve, /reject, /canceldispatch, /retrydispatch\n"
+    "/assignments, /assignmentstatus <assignment_id>\n"
     "/nightshift, /nightstatus, /nightqueue [cancel <job_id>], /wake\n"
     "/resume, /progress, /continue\n"
     "/route <pesan> — klasifikasi cepat\n"
@@ -126,6 +131,9 @@ HELP_MESSAGE: Final = (
     "/dissertation [chapter <n>|gaps|next|tasks|evidence <n>|sources [n]|decisions]\n"
     "/dissertation addsource <chapter n|-> | judul | jenis | sitasi | lokator\n"
     "/dissertation addevidence <source id> | <chapter n|-> | ringkasan | lokator | keyakinan\n"
+    "/knowledgesource <judul> | <jenis sumber> | <sitasi> [| <lokator>]\n"
+    "/knowledgeitem <id sumber> | <judul> | <ringkasan> [| <tag>] [| <keyakinan>]\n"
+    "/knowledgequery <kata kunci atau tag>\n"
     "Anda juga dapat memakai bahasa natural sederhana."
 )
 STATUS_MESSAGE: Final = (
@@ -145,6 +153,10 @@ def _settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 
 def _memory(context: ContextTypes.DEFAULT_TYPE) -> WorkspaceMemoryService:
     return cast(WorkspaceMemoryService, context.application.bot_data["memory"])
+
+
+def _knowledge(context: ContextTypes.DEFAULT_TYPE) -> KnowledgeService | None:
+    return cast(KnowledgeService | None, context.application.bot_data.get("knowledge"))
 
 
 def _provider_svc(context: ContextTypes.DEFAULT_TYPE) -> ProviderGatewayService | None:
@@ -811,6 +823,13 @@ def _approval_svc(context: ContextTypes.DEFAULT_TYPE) -> ApprovalService:
     return cast(ApprovalService, svc)
 
 
+def _agent_assignments(context: ContextTypes.DEFAULT_TYPE) -> AgentAssignmentService:
+    svc = context.application.bot_data.get("agent_assignment_svc")
+    if svc is None:
+        raise DispatchUnavailableError("Agent assignment service is unavailable.")
+    return cast(AgentAssignmentService, svc)
+
+
 
 def _bounded_message(lines: list[str], limit: int = 3500) -> str:
     result = "\n".join(lines)
@@ -839,16 +858,30 @@ async def capture_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await message.reply_text("Control Tower is temporarily unavailable.")
         return
     raw = _argument_text(context)
-    fields = raw.split(maxsplit=1)
-    if len(fields) != 2:
-        await message.reply_text("Usage: /capture category title")
+    fields = _pipe_fields(raw, 1, 2)
+    if fields is None:
+        await message.reply_text("Usage: /capture category title [| project name]")
+        return
+    category_and_title = fields[0].split(maxsplit=1)
+    if len(category_and_title) != 2:
+        await message.reply_text("Usage: /capture category title [| project name]")
         return
     try:
-        item = service.capture_work(fields[0], fields[1], "telegram")
+        project_id = None
+        if len(fields) == 2:
+            project_name = service._clean_text(fields[1], "Project name", required=True, limit=200)
+            memory = context.application.bot_data.get("memory")
+            if not isinstance(memory, WorkspaceMemoryService):
+                raise ValidationError("Project lookup is unavailable")
+            try:
+                project_id = memory.get_project(project_name or "").id
+            except ProjectNotFoundError as error:
+                raise ValidationError("Project was not found") from error
+        item = service.capture_work(category_and_title[0], category_and_title[1], "telegram", project_id=project_id)
     except Exception as error:
         await _control_tower_error(message, "Capture failed", error)
         return
-    await message.reply_text(f"Captured: {item.title} ({item.item_id[:8]}). Route: {item.recommended_route}.")
+    await message.reply_text(f"Captured: {item.title} ({item.item_id}). Route: {item.recommended_route}.")
 
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -866,7 +899,46 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as error:
         await _control_tower_error(message, "Today view failed", error)
         return
-    lines = ["Today priorities:"] + ([f"• {item.title} — {item.status}" for item in items] or ["• No active priorities."])
+    lines = ["Today priorities:"] + ([
+        f"• {item.title} — Status: {item.status}; Owner: {service.owner_for(item)}; "
+        f"Next action: {service.next_action_for(item)}"
+        for item in items
+    ] or ["• No active priorities."])
+    await message.reply_text(_bounded_message(lines))
+
+async def workitem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _control_tower(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Control Tower is temporarily unavailable.")
+        return
+    item_id = _argument_text(context)
+    if not item_id:
+        await message.reply_text("Usage: /workitem <item_id>")
+        return
+    try:
+        item = service.repository.get_work_item(item_id)
+        if item is None:
+            raise ValidationError("Work item was not found")
+        dependencies = ", ".join(item.dependencies) if item.dependencies else "None"
+        decisions = service.repository.list_decisions_for_project(item.project_id) if item.project_id is not None else []
+        decisions_text = "; ".join(decision.summary for decision in decisions) if decisions else "None recorded."
+        lines = [
+            f"Work item: {item.title}",
+            f"ID: {item.item_id}",
+            f"Status: {item.status}",
+            f"Owner: {service.owner_for(item)}",
+            f"Next action: {service.next_action_for(item)}",
+            f"Dependencies: {dependencies}",
+            f"Decisions: {decisions_text}",
+        ]
+    except Exception as error:
+        await _control_tower_error(message, "Work item lookup failed", error)
+        return
     await message.reply_text(_bounded_message(lines))
 
 
@@ -1008,6 +1080,63 @@ async def handle_dispatchstatus(update: Update, context: ContextTypes.DEFAULT_TY
         ]))
     except Exception as error:
         await _dispatch_reply_error(message, "Dispatch status failed", error)
+
+
+async def _assignment_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Message | None:
+    if not await _require_authorized_user(update, context):
+        return None
+    return update.effective_message
+
+
+async def _assignment_reply_error(message: Message, action: str, error: Exception) -> None:
+    if isinstance(error, AgentAssignmentError):
+        await message.reply_text(f"{action}: check the assignment identifier and try again.")
+        return
+    LOGGER.exception("Unexpected AgentAssignment handler failure")
+    await message.reply_text(f"{action}: temporary problem. Please try again later.")
+
+
+async def handle_assignments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _assignment_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) > 2:
+        await message.reply_text("Usage: /assignments [status]")
+        return
+    try:
+        assignments = _agent_assignments(context).list_assignments(status=parts[1] if len(parts) == 2 else None)
+        lines = ["Assignments:"] + (
+            [
+                f"• {item.assignment_id[:12]} — {item.assigned_agent_id} — {item.status}"
+                for item in assignments
+            ]
+            or ["• No assignments."]
+        )
+        await message.reply_text(_bounded_message(lines))
+    except Exception as error:
+        await _assignment_reply_error(message, "Assignments unavailable", error)
+
+
+async def handle_assignmentstatus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = await _assignment_message(update, context)
+    if message is None:
+        return
+    parts = (message.text or "").split()
+    if len(parts) != 2:
+        await message.reply_text("Usage: /assignmentstatus <assignment_id>")
+        return
+    try:
+        assignment = _agent_assignments(context).get_assignment(parts[1])
+        await message.reply_text(_bounded_message([
+            f"Assignment: {assignment.assignment_id[:12]}",
+            f"Status: {assignment.status}",
+            f"Agent: {assignment.assigned_agent_id}",
+            f"Capability: {assignment.requested_capability}",
+            f"Dispatch: {assignment.dispatch_id[:12] if assignment.dispatch_id else 'not started'}",
+        ]))
+    except Exception as error:
+        await _assignment_reply_error(message, "Assignment status unavailable", error)
 
 
 async def handle_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1322,6 +1451,97 @@ async def dissertation_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await message.reply_text(_bounded_message(lines))
 
 
+async def knowledgesource_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    fields = _pipe_fields(" ".join(context.args), 3, 4)
+    if fields is None:
+        await message.reply_text("Usage: /knowledgesource <title> | <source type> | <citation> [| <locator>]")
+        return
+    try:
+        source = service.create_source(
+            fields[0], fields[1], fields[2], f"user:{update.effective_user.id}",
+            origin_system="telegram", origin_ref=fields[3] if len(fields) == 4 else None,
+        )
+        await message.reply_text(f"Knowledge source created: #{source.id} {source.title} ({source.source_type})")
+    except (InvalidKnowledgeValueError, KnowledgeError) as error:
+        await message.reply_text(str(error))
+    except Exception:
+        LOGGER.exception("Knowledge source handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
+async def knowledgeitem_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    fields = _pipe_fields(" ".join(context.args), 3, 5)
+    if fields is None:
+        await message.reply_text("Usage: /knowledgeitem <source id> | <title> | <summary> [| <tags>] [| <confidence>]")
+        return
+    try:
+        item = service.create_item(
+            int(fields[0]), fields[1], fields[2], f"user:{update.effective_user.id}",
+            tags=fields[3] if len(fields) >= 4 else "",
+            confidence=fields[4] if len(fields) == 5 else "MEDIUM",
+        )
+        await message.reply_text(
+            f"Knowledge item created: #{item.id} from source #{item.source_id} (confidence: {item.confidence})"
+        )
+    except (InvalidKnowledgeValueError, KnowledgeError) as error:
+        await message.reply_text(str(error))
+    except (ValueError, TypeError):
+        await message.reply_text("Source id must be a positive integer.")
+    except Exception:
+        LOGGER.exception("Knowledge item handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
+async def knowledgequery_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    service = _knowledge(context)
+    if message is None:
+        return
+    if service is None:
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+        return
+    query = " ".join(context.args)
+    if not query.strip():
+        await message.reply_text("Usage: /knowledgequery <keyword or tag>")
+        return
+    try:
+        results = service.query(keyword=query)
+        lines = ["Knowledge results:"] + (
+            [
+                f"• #{result.item.id} {result.item.title} — {result.item.summary}\n"
+                f"  Source #{result.source.id}: {result.source.title} ({result.source.source_type})\n"
+                f"  Citation: {result.source.citation_text}"
+                for result in results
+            ] or ["• None."]
+        )
+        await message.reply_text(_bounded_message(lines))
+    except InvalidKnowledgeValueError as error:
+        await message.reply_text(str(error))
+    except Exception:
+        LOGGER.exception("Knowledge query handler failed")
+        await message.reply_text("Knowledge Operations is temporarily unavailable.")
+
+
 def build_application(
     settings: Settings,
     memory: WorkspaceMemoryService,
@@ -1333,6 +1553,8 @@ def build_application(
     approvals: ApprovalService | None = None,
     night_worker: NightShiftWorker | None = None,
     dissertation: DissertationService | None = None,
+    agent_assignments: AgentAssignmentService | None = None,
+    knowledge: KnowledgeService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1342,10 +1564,13 @@ def build_application(
     application.bot_data["night_shift"] = night_shift
     application.bot_data["control_tower"] = control_tower
     application.bot_data["dissertation"] = dissertation
+    application.bot_data["knowledge"] = knowledge
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
         application.bot_data["approval_svc"] = approvals
+    if agent_assignments is not None:
+        application.bot_data["agent_assignment_svc"] = agent_assignments
     if night_worker:
         application.bot_data["night_worker"] = night_worker
     application.bot_data["provider"] = provider
@@ -1376,6 +1601,7 @@ def build_application(
 
     application.add_handler(CommandHandler("capture", capture_handler))
     application.add_handler(CommandHandler("today", today_handler))
+    application.add_handler(CommandHandler("workitem", workitem_handler))
     application.add_handler(CommandHandler("approvals", approvals_handler))
     application.add_handler(CommandHandler("shutdown", shutdown_handler))
     application.add_handler(CommandHandler("morning", morning_handler))
@@ -1384,6 +1610,9 @@ def build_application(
     application.add_handler(CommandHandler("nightqueue", nightqueue_command))
     application.add_handler(CommandHandler("wake", wake_command))
     application.add_handler(CommandHandler("dissertation", dissertation_handler))
+    application.add_handler(CommandHandler("knowledgesource", knowledgesource_handler))
+    application.add_handler(CommandHandler("knowledgeitem", knowledgeitem_handler))
+    application.add_handler(CommandHandler("knowledgequery", knowledgequery_handler))
 
 
     if dispatch is not None:
@@ -1394,6 +1623,9 @@ def build_application(
         application.add_handler(CommandHandler("reject", handle_reject))
         application.add_handler(CommandHandler("canceldispatch", handle_canceldispatch))
         application.add_handler(CommandHandler("retrydispatch", handle_retrydispatch))
+    if agent_assignments is not None:
+        application.add_handler(CommandHandler("assignments", handle_assignments))
+        application.add_handler(CommandHandler("assignmentstatus", handle_assignmentstatus))
 
     # Generic text fallback must be registered after every command handler.
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
