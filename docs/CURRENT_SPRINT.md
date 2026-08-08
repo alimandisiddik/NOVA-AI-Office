@@ -317,3 +317,27 @@ Control Tower, or Google Workspace code touched; classifier-only change.
 
 See `docs/SPRINT_5G2.md` for the full classification design, precedence
 decision, acceptance-case matrix, and test evidence.
+
+## Wave 6 — NOVA Executive Office Foundation (architecture frozen)
+
+Status: Architecture/contracts FROZEN by ChatGPT/Control Tower. Not yet
+implemented.
+
+Shared-contract design for five parallel Codex worktree sprints — 7A
+(Executive Workflow), 7B (Knowledge Operations), 7C (Morning Executive
+Brief), 7D (Agent Registry & Assignment), 7E (Dashboard Skeleton) — is
+complete and frozen. See `docs/WAVE_6_SHARED_CONTRACTS.md` for the contract
+evaluation, ten architecture decisions (AD-W6-01…10), ownership matrix, and
+integration order, and `docs/SPRINT_7A.md` through `docs/SPRINT_7E.md` for
+each mini-sprint's full spec.
+
+Naming: this initiative was drafted under the working label "Wave 5," which
+would have collided with this log's existing Sprint 5G-family Wave 5
+entries above; it was renamed to Wave 6 as part of the freeze. Sprint 7E's
+dashboard is frozen as a fully separate, explicitly-invoked process —
+`app/main.py` is never touched by it and never starts it. The 7A/7D
+boundary (`WorkItem`/workflow vs. `AgentAssignment`/assignment state) is
+frozen with a narrow, named read interface between them
+(`get_active_assignment_summary()`), documented in `docs/WAVE_6_SHARED_CONTRACTS.md`
+AD-W6-01. No application code has been written — this entry records
+architecture preparation only.
