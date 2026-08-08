@@ -83,6 +83,11 @@ from app.providers.service import ProviderGatewayService
 from app.providers.registry import get_registered_model
 from app.providers.selection import resolve_upstream_route_id
 from app.providers.errors import ProviderError
+from app.conversation import ConversationService
+from app.google_workspace.bundle import WorkspaceConnectorBundle
+from app.google_workspace.telegram import workspacestatus_command
+from app.intake import IntakeService
+from app.intake.telegram import wa_command, waconfirm_command
 from app.execution.formatters import (
     execution_approved_message,
     execution_cancelled_message,
@@ -1645,6 +1650,9 @@ def build_application(
     agent_assignments: AgentAssignmentService | None = None,
     knowledge: KnowledgeService | None = None,
     executive_brief: ExecutiveBriefService | None = None,
+    google_workspace: WorkspaceConnectorBundle | None = None,
+    intake: IntakeService | None = None,
+    conversation: ConversationService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1656,6 +1664,9 @@ def build_application(
     application.bot_data["dissertation"] = dissertation
     application.bot_data["knowledge"] = knowledge
     application.bot_data["executive_brief"] = executive_brief
+    application.bot_data["google_workspace"] = google_workspace
+    application.bot_data["intake"] = intake
+    application.bot_data["conversation"] = conversation
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1705,6 +1716,9 @@ def build_application(
     application.add_handler(CommandHandler("knowledgeitem", knowledgeitem_handler))
     application.add_handler(CommandHandler("knowledgequery", knowledgequery_handler))
     application.add_handler(CommandHandler("execbrief", execbrief_handler))
+    application.add_handler(CommandHandler("workspacestatus", workspacestatus_command))
+    application.add_handler(CommandHandler("wa", wa_command))
+    application.add_handler(CommandHandler("waconfirm", waconfirm_command))
 
     if dispatch is not None:
         application.add_handler(CommandHandler("dispatch", handle_dispatch))
