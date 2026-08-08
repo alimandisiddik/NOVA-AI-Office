@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NOVA Executive Dashboard</title>
+  <style>
+    body { background: #f5f7fa; color: #1d2733; font: 16px/1.45 system-ui, sans-serif; margin: 0; }
+    header, main { max-width: 1200px; margin: auto; padding: 1.25rem; }
+    header { display: flex; justify-content: space-between; align-items: baseline; }
+    h1 { margin: 0; } h2 { margin-top: 0; font-size: 1.1rem; } h3 { font-size: 0.95rem; }
+    section, .notice { background: white; border: 1px solid #d9e0e8; border-radius: .5rem; margin: 1rem 0; padding: 1rem; }
+    .notice { border-color: #c89a2b; background: #fff8e6; } .brief-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    table { border-collapse: collapse; width: 100%; } th, td { border-bottom: 1px solid #d9e0e8; padding: .55rem; text-align: left; vertical-align: top; }
+    th { color: #425466; } small, .empty { color: #64748b; } dt { font-weight: 700; } dd { margin: 0 0 .5rem; }
+  </style>
+</head>
+<body>
+  <header><h1>NOVA Executive Dashboard</h1><small>Read-only local view · generated $generated_at</small></header>
+  <main>
+    $notices
+    <section><h2>Executive Brief</h2>$brief</section>
+    <section><h2>Projects</h2>$projects</section>
+    <section><h2>Active Work</h2>$work</section>
+    <section><h2>Agent Assignments</h2>$assignments</section>
+    <section><h2>Knowledge</h2>$knowledge</section>
+    <section><h2>System Status</h2>$system_status</section>
+    <section><h2>Approval / Blocker Summary</h2>$approvals</section>
+  </main>
+</body>
+</html>

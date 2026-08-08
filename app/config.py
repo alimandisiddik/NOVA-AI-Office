@@ -42,6 +42,10 @@ class Settings:
     google_token_storage_path: Path | None = None
     google_oauth_port: int = 0
 
+    # Executive Dashboard Settings (default off; used only by app.dashboard.server)
+    nova_dashboard_enabled: bool = False
+    nova_dashboard_port: int = 8787
+
 
 def _repository_env_file() -> Path:
     return Path(__file__).resolve().parent.parent / ".env"
@@ -129,6 +133,17 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
             "GOOGLE_CLIENT_SECRETS_PATH and GOOGLE_TOKEN_STORAGE_PATH must be configured together"
         )
 
+    dashboard_enabled_raw = environment.get("NOVA_DASHBOARD_ENABLED", "false").strip().lower()
+    if dashboard_enabled_raw not in {"true", "false"}:
+        raise ConfigurationError("NOVA_DASHBOARD_ENABLED must be true or false")
+    dashboard_port_raw = environment.get("NOVA_DASHBOARD_PORT", "8787").strip()
+    try:
+        dashboard_port = int(dashboard_port_raw)
+    except ValueError as error:
+        raise ConfigurationError("NOVA_DASHBOARD_PORT must be an integer") from error
+    if not 1 <= dashboard_port <= 65535:
+        raise ConfigurationError("NOVA_DASHBOARD_PORT must be between 1 and 65535")
+
     return Settings(
         telegram_bot_token=token,
         telegram_allowed_user_id=allowed_user_id,
@@ -147,4 +162,6 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         google_client_secrets_path=Path(google_secrets) if google_secrets else None,
         google_token_storage_path=Path(google_token) if google_token else None,
         google_oauth_port=google_port,
+        nova_dashboard_enabled=dashboard_enabled_raw == "true",
+        nova_dashboard_port=dashboard_port,
     )
