@@ -31,10 +31,19 @@ from app.providers.adapter import ProviderAdapter
 from app.providers.repository import ProviderRepository
 from app.providers.service import ProviderGatewayService
 from app.conversation import ConversationService
+from app.drafting import DraftingService
 from app.google_workspace.bundle import WorkspaceConnectorBundle
 from app.intake import IntakeService
 from app.telegram_bot import build_application
+from app.workspace_bridge import WorkspaceBridgeService
 from app.workspace_intel import WorkspaceIntelService
+
+
+class _UnavailableWorkspaceAuthenticator:
+    """Fail closed when Workspace OAuth has not been configured."""
+
+    def get_account_namespace(self) -> None:
+        return None
 
 
 def configure_logging() -> None:
@@ -163,11 +172,31 @@ def main() -> int:
         logger.error("Knowledge Operations schema initialization failed.")
         return 1
 
-    executive_brief = ExecutiveBriefService(control_tower, night_shift=night_shift, knowledge=knowledge)
-
     # Workspace OAuth remains optional and must not be probed at startup. The
     # Stage-1 status handler accepts a missing bundle and reports it safely.
     google_workspace: WorkspaceConnectorBundle | None = None
+
+    drafting = DraftingService(memory.database)
+    try:
+        drafting.initialize()
+    except MemoryDatabaseError:
+        logger.error("Drafting schema initialization failed.")
+        return 1
+
+    workspace_bridge = WorkspaceBridgeService(
+        memory.database,
+        google_workspace.authenticator if google_workspace is not None else _UnavailableWorkspaceAuthenticator(),
+        control_tower,
+        knowledge,
+    )
+    try:
+        workspace_bridge.initialize()
+    except MemoryDatabaseError:
+        logger.error("Workspace bridge schema initialization failed.")
+        return 1
+
+    executive_brief = ExecutiveBriefService(control_tower, night_shift=night_shift, knowledge=knowledge)
+
     workspace_intel = (
         WorkspaceIntelService(google_workspace.gmail, google_workspace.calendar)
         if google_workspace is not None
@@ -242,6 +271,8 @@ def main() -> int:
         workspace_intel=workspace_intel,
         intake=intake,
         conversation=conversation,
+        drafting=drafting,
+        workspace_bridge=workspace_bridge,
     )
     application.run_polling()
     return 0

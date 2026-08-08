@@ -14,10 +14,19 @@ def test_workspace_bridge_never_uses_client_identity_or_canonical_table_sql() ->
         assert forbidden not in source
 
 
-def test_workspace_bridge_has_no_workspace_mutation_or_bootstrap_edits() -> None:
+def test_workspace_bridge_has_no_workspace_mutation() -> None:
     root = Path(__file__).parents[1]
     source = "\n".join(path.read_text() for path in (root / "app" / "workspace_bridge").glob("*.py"))
 
     for forbidden in (".send(", ".modify(", ".trash(", ".insert(", ".update(", ".delete("):
         assert forbidden not in source
-    assert "workspace_bridge" not in (root / "app" / "main.py").read_text()
+
+
+def test_workspace_bridge_package_never_reaches_into_shared_bootstrap() -> None:
+    """G3 (app/main.py, app/telegram_bot.py) may reference workspace_bridge; the
+    reverse must stay false, so the package itself never owns bootstrap wiring."""
+    package = Path(__file__).parents[1] / "app" / "workspace_bridge"
+    source = "\n".join(path.read_text() for path in package.glob("*.py"))
+
+    for forbidden in ("app.main", "app.telegram_bot", "build_application", "ApplicationBuilder"):
+        assert forbidden not in source

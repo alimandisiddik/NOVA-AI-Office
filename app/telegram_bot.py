@@ -84,9 +84,20 @@ from app.providers.registry import get_registered_model
 from app.providers.selection import resolve_upstream_route_id
 from app.providers.errors import ProviderError
 from app.conversation import ConversationService
+from app.drafting import DraftingService
+from app.drafting.telegram import (
+    draft_command,
+    draftmemo_command,
+    draftreply_command,
+    draftsheet_command,
+    draftslides_command,
+    drafts_command,
+)
 from app.google_workspace.bundle import WorkspaceConnectorBundle
 from app.google_workspace.telegram import workspacestatus_command
 from app.workspace_intel import WorkspaceIntelService
+from app.workspace_bridge import WorkspaceBridgeService
+from app.workspace_bridge.telegram import workspacecandidates_command, workspacecommit_command
 from app.intake import IntakeService
 from app.intake.telegram import wa_command, waconfirm_command
 from app.execution.formatters import (
@@ -1733,6 +1744,8 @@ def build_application(
     workspace_intel: WorkspaceIntelService | None = None,
     intake: IntakeService | None = None,
     conversation: ConversationService | None = None,
+    drafting: DraftingService | None = None,
+    workspace_bridge: WorkspaceBridgeService | None = None,
 ) -> Application:
     """Build the local polling application with scoped command handlers."""
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
@@ -1748,6 +1761,8 @@ def build_application(
     application.bot_data["workspace_intel"] = workspace_intel
     application.bot_data["intake"] = intake
     application.bot_data["conversation"] = conversation
+    application.bot_data["drafting"] = drafting
+    application.bot_data["workspace_bridge"] = workspace_bridge
     if dispatch is not None:
         application.bot_data["dispatch_svc"] = dispatch
     if approvals is not None:
@@ -1802,6 +1817,14 @@ def build_application(
     application.add_handler(CommandHandler("agenda", agenda_command))
     application.add_handler(CommandHandler("wa", wa_command))
     application.add_handler(CommandHandler("waconfirm", waconfirm_command))
+    application.add_handler(CommandHandler("draftreply", draftreply_command))
+    application.add_handler(CommandHandler("draftmemo", draftmemo_command))
+    application.add_handler(CommandHandler("draftsheet", draftsheet_command))
+    application.add_handler(CommandHandler("draftslides", draftslides_command))
+    application.add_handler(CommandHandler("drafts", drafts_command))
+    application.add_handler(CommandHandler("draft", draft_command))
+    application.add_handler(CommandHandler("workspacecandidates", workspacecandidates_command))
+    application.add_handler(CommandHandler("workspacecommit", workspacecommit_command))
 
     if dispatch is not None:
         application.add_handler(CommandHandler("dispatch", handle_dispatch))
