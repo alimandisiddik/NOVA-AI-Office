@@ -17,12 +17,22 @@ class GoogleScope(enum.Enum):
     # Read-only Drive scopes
     DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 
+    # Read-only Workspace content scopes
+    GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+    DOCS_READONLY = "https://www.googleapis.com/auth/documents.readonly"
+    SHEETS_READONLY = "https://www.googleapis.com/auth/spreadsheets.readonly"
+    SLIDES_READONLY = "https://www.googleapis.com/auth/presentations.readonly"
+
 
 class ScopeBundle(enum.Enum):
     """Expose approved named scope bundles through a stable accessor."""
     DEFAULT = (GoogleScope.USERINFO_EMAIL.value, GoogleScope.USERINFO_PROFILE.value)
     CALENDAR = (*DEFAULT, GoogleScope.CALENDAR_READONLY.value)
     DRIVE_READ = (*DEFAULT, GoogleScope.DRIVE_READONLY.value)
+    GMAIL_READ = (*DEFAULT, GoogleScope.GMAIL_READONLY.value)
+    DOCS_READ = (*DEFAULT, GoogleScope.DOCS_READONLY.value)
+    SHEETS_READ = (*DEFAULT, GoogleScope.SHEETS_READONLY.value)
+    SLIDES_READ = (*DEFAULT, GoogleScope.SLIDES_READONLY.value)
 
 
 def canonicalize_scopes(scopes: list[str] | tuple[str, ...]) -> tuple[str, ...]:
