@@ -1,5 +1,13 @@
 # Wave 7 Shared Contracts — Executive Operations & Workspace Automation
 
+> **8E revision control — Sprint 8E architecture revision (post-G3):**
+> `docs/SPRINT_8E.md` is the controlling Stage 4 contract. Any earlier text
+> in this document describing broad 8E Gmail, Calendar, Drive, Docs, Sheets,
+> or Slides write execution is superseded for Sprint 8E acceptance and must be
+> read as future roadmap only. The executable MVP is one private
+> `create_docs_file` action sourced from a current ready 8C `docs_memo`.
+> `share_file` and all other Workspace writes are out of scope.
+
 ## Status: **ARCHITECTURE FROZEN, PENDING FINAL CONTROL TOWER SIGN-OFF** —
 revised per Control Tower Freeze Review to (1) move Stage 1 shared bootstrap
 wiring to G1 integration-branch ownership, (2) place Google Keep on
@@ -18,6 +26,63 @@ Baseline: `594c36f` (merge: Sprint 7E executive dashboard skeleton), branch
 759 passing tests. This document governs seven sprints — **8A–8G** — across
 four sequential stages, each stage closed by a named integration gate before
 the next stage starts.
+
+## 0a. Sprint 8E Workspace Write Safety revision (AD-8E-01…06)
+
+This post-G3 revision narrows Stage 4 without changing stages 1–3. The single
+MVP external-write spine is `docs_memo -> create_docs_file -> dispatch ->
+canonical approval -> freshness/integrity -> CAS -> typed Docs write ->
+succeeded|outcome_unknown`. Its core invariant is **no valid approval = no
+Google write**.
+
+- **AD-8E-01 — freshness:** 8E must use an additive 8C public
+  `get_current_ready_action(action_id)` contract. It proves both
+  `ready_for_action` and absence of a successor whose `supersedes_id` is the
+  source action. A fingerprint is integrity-only and cannot substitute for
+  current-revision validation. 8E makes no cross-domain raw SQL query.
+- **AD-8E-02 — outcome uncertainty:** WorkspaceAction adds terminal
+  `outcome_unknown` for ambiguous post-submission failures. It never retries
+  automatically and exposes reconciliation-required status without content.
+- **AD-8E-03 — scopes:** OAuth compatibility uses
+  `required_scopes ⊆ granted_scopes`, retaining validation against the approved
+  registry. The frozen capability is Docs blank-document creation and body
+  insertion through `documents.create` then `documents.batchUpdate` with
+  `InsertTextRequest`. For that exact app-created-resource implementation,
+  `drive.file` is sufficient and is the least-privilege write-scope choice;
+  it is not claimed as the only scope that can authorize Docs operations
+  generally. Missing capability fails closed without disabling reads.
+- **AD-8E-04 — runtime:** 8E owns minimal configuration-aware bundle wiring
+  using the existing `GoogleAuthenticator` and `GoogleClientFactory`. Startup
+  performs no OAuth, refresh, browser, or network activity. Missing write
+  capability disables only the write action.
+- **AD-8E-05 — dispatch:** append `workspace_action` as an additive source,
+  map `source_id` to WorkspaceAction ID, and use a specific approval-required
+  `workspace_write` capability with `google_workspace_adapter`. Existing
+  source semantics stay intact.
+- **AD-8E-06 — risk:** `create_docs_file` is
+  `MODERATE_EXTERNAL_WRITE`, private/default-private and manually reversible,
+  but always explicitly approved. Bare affirmative conversation cannot grant
+  approval; an exact active action-specific choice is required.
+
+### Shared data, reconciliation, and documentation rules
+
+- WorkspaceAction persistence/audit is metadata-only and never duplicates 8C
+  body content, OAuth material, secrets, or raw provider responses. The
+  immutable 8C action remains canonical content storage.
+- All approval expiry and WorkspaceAction timestamps use an injectable
+  application UTC clock and ISO-8601 UTC values; no DB implicit/local time
+  decides action safety.
+- `outcome_unknown` safely displays action ID, type, attempt timestamp,
+  sanitized provider reference, and correlation ID, plus reconciliation
+  required. A future explicit admin-safe reconciliation mechanism is mandatory
+  before irreversible actions such as Gmail send.
+- Before live OAuth reliance, verify Google Auth Platform publishing/testing
+  state and token-lifetime behavior in the actual environment. Do not assume a
+  refresh-token lifetime in architecture documentation.
+- Architecture and review documentation must use repo-relative paths and omit
+  absolute home paths, personal emails, OAuth client IDs, tokens, credentials,
+  and machine-specific personal identifiers unless technically required.
+  Technical provenance such as commit hashes remains allowed.
 
 ---
 

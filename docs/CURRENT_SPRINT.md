@@ -457,7 +457,21 @@ acceptable deviation — corrected as follows:
 Full regression re-run after the fix; see the review record for the exact
 pass count.
 
-## Wave 7 — Executive Operations & Workspace Automation (architecture frozen, pending final Control Tower sign-off)
+## Wave 7 — Executive Operations & Workspace Automation (Stages 1–3 complete; Sprint 8E revised)
+
+**Current controlling status (Sprint 8E Architecture Revision):** G3 Stage 3
+integration is complete and merged; Stage 4 has not started. The earlier broad
+8E write proposal is superseded by `docs/SPRINT_8E.md`. Sprint 8E now proves
+only `docs_memo -> create_docs_file`: current-ready 8C lineage validation,
+exact action-bound approval, canonical payload-integrity validation, CAS claim,
+typed private Docs creation, metadata-only audit, and `outcome_unknown`
+without automatic retry. Its frozen Docs capability is `documents.create`
+followed by `documents.batchUpdate`/`InsertTextRequest`; `drive.file` is the
+least-privilege scope choice for that app-created-document implementation, not
+a claim that it is the only valid Docs scope generally. Gmail, Calendar, Drive
+sharing/permissions, Sheets, Slides, Docs edits, bulk actions, and generic API
+execution are out of scope. This revision is documentation-only and has human
+approval.
 
 Status: Architecture/contracts FROZEN by Claude (Technical Architect),
 revised twice — first to cover the full target Workspace surface, then per
