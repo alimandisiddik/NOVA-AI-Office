@@ -86,6 +86,7 @@ from app.providers.errors import ProviderError
 from app.conversation import ConversationService
 from app.google_workspace.bundle import WorkspaceConnectorBundle
 from app.google_workspace.telegram import workspacestatus_command
+from app.workspace_intel import WorkspaceIntelService
 from app.intake import IntakeService
 from app.intake.telegram import wa_command, waconfirm_command
 from app.execution.formatters import (
@@ -822,6 +823,11 @@ def _executive_brief(context: ContextTypes.DEFAULT_TYPE) -> ExecutiveBriefServic
     service = context.application.bot_data.get("executive_brief")
     return service if isinstance(service, ExecutiveBriefService) else None
 
+
+def _workspace_intel(context: ContextTypes.DEFAULT_TYPE) -> WorkspaceIntelService | None:
+    service = context.application.bot_data.get("workspace_intel")
+    return service if isinstance(service, WorkspaceIntelService) else None
+
 def _dissertation(context: ContextTypes.DEFAULT_TYPE) -> DissertationService | None:
     service = context.application.bot_data.get("dissertation")
     return service if isinstance(service, DissertationService) else None
@@ -1042,6 +1048,79 @@ async def execbrief_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except Exception as error:
         await _control_tower_error(message, "Executive brief failed", error)
         return
+    await message.reply_text(_bounded_message(lines))
+
+
+async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message is None:
+        return
+    service = _workspace_intel(context)
+    if service is None:
+        await message.reply_text("Inbox intelligence is temporarily unavailable.")
+        return
+    try:
+        view = service.prioritized_inbox()
+    except Exception:
+        LOGGER.exception("Inbox intelligence handler failed")
+        await message.reply_text("Inbox intelligence is temporarily unavailable.")
+        return
+    lines = ["NOVA — Prioritized Inbox", view.generated_at]
+    if not view.messages:
+        lines.append("No inbox items were returned.")
+    for item in view.messages:
+        source = item.message
+        unread = "unread" if "UNREAD" in {label.upper() for label in source.label_ids} else "read"
+        lines.extend(
+            (
+                "",
+                f"FACT — {source.subject} | {source.sender_alias} | {unread}",
+                f"INFERENCE — {item.reason} (priority {item.priority_score}/100)",
+                f"RECOMMENDATION — {item.recommendation}",
+            )
+        )
+    if view.truncated:
+        lines.append("Results are bounded; additional inbox items may exist.")
+    await message.reply_text(_bounded_message(lines))
+
+
+async def agenda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_authorized_user(update, context):
+        return
+    message = update.effective_message
+    if message is None:
+        return
+    service = _workspace_intel(context)
+    if service is None:
+        await message.reply_text("Agenda intelligence is temporarily unavailable.")
+        return
+    try:
+        view = service.upcoming_agenda()
+    except Exception:
+        LOGGER.exception("Agenda intelligence handler failed")
+        await message.reply_text("Agenda intelligence is temporarily unavailable.")
+        return
+    lines = ["NOVA — Upcoming Agenda", view.generated_at]
+    for label, meetings in (("TODAY", view.today), ("TOMORROW", view.tomorrow)):
+        lines.append(f"\n{label}")
+        if not meetings:
+            lines.append("No meetings were returned.")
+        for item in meetings:
+            brief = item.brief
+            lines.append(f"FACT — {brief.title} | {brief.start.isoformat()} | attendees: {brief.attendee_count}")
+            signals: list[str] = []
+            if item.has_conflict:
+                signals.append("may conflict with the existing calendar window")
+            if item.missing_preparation:
+                signals.append("may need preparation because no prepared brief is available")
+            inference = "; ".join(signals).capitalize() + "." if signals else "No additional attention signals were inferred."
+            lines.append(f"INFERENCE — {inference}")
+            recommendation = "Prepare before the meeting" if item.missing_preparation else "Review meeting details"
+            lines.append(f"RECOMMENDATION — {recommendation}")
+    if view.truncated:
+        lines.append("\nResults are bounded; additional calendar events may exist.")
     await message.reply_text(_bounded_message(lines))
 
 
@@ -1651,6 +1730,7 @@ def build_application(
     knowledge: KnowledgeService | None = None,
     executive_brief: ExecutiveBriefService | None = None,
     google_workspace: WorkspaceConnectorBundle | None = None,
+    workspace_intel: WorkspaceIntelService | None = None,
     intake: IntakeService | None = None,
     conversation: ConversationService | None = None,
 ) -> Application:
@@ -1665,6 +1745,7 @@ def build_application(
     application.bot_data["knowledge"] = knowledge
     application.bot_data["executive_brief"] = executive_brief
     application.bot_data["google_workspace"] = google_workspace
+    application.bot_data["workspace_intel"] = workspace_intel
     application.bot_data["intake"] = intake
     application.bot_data["conversation"] = conversation
     if dispatch is not None:
@@ -1717,6 +1798,8 @@ def build_application(
     application.add_handler(CommandHandler("knowledgequery", knowledgequery_handler))
     application.add_handler(CommandHandler("execbrief", execbrief_handler))
     application.add_handler(CommandHandler("workspacestatus", workspacestatus_command))
+    application.add_handler(CommandHandler("inbox", inbox_command))
+    application.add_handler(CommandHandler("agenda", agenda_command))
     application.add_handler(CommandHandler("wa", wa_command))
     application.add_handler(CommandHandler("waconfirm", waconfirm_command))
 
