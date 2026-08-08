@@ -252,8 +252,8 @@ class GoogleAuthenticator:
             canonical_granted_scopes = canonicalize_scopes(tuple(granted_scopes))
         except ValueError as error:
             raise AuthError("Credential scopes are not approved") from error
-        if canonical_granted_scopes != self._scopes:
-            raise AuthError("Credential scopes do not exactly match requested scopes")
+        if not set(self._scopes).issubset(canonical_granted_scopes):
+            raise AuthError("Credential scopes do not satisfy requested capabilities")
 
     def _deserialize_credentials(self, token_data: str) -> Any:
         dependencies = _load_oauth_dependencies()

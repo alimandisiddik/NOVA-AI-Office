@@ -33,10 +33,23 @@ from app.providers.service import ProviderGatewayService
 from app.conversation import ConversationService
 from app.drafting import DraftingService
 from app.google_workspace.bundle import WorkspaceConnectorBundle
+from app.google_workspace.auth import GoogleAuthenticator, SecureFileTokenStorage
+from app.google_workspace.calendar.audit import InMemoryCalendarAuditSink
+from app.google_workspace.calendar.service import CalendarService
+from app.google_workspace.docs import LazyDocsWriteService
+from app.google_workspace.docs.service import DocsService
+from app.google_workspace.drive.models import AllowlistedFolder, ConfigError as DriveConfigError
+from app.google_workspace.drive.service import DriveReadService
+from app.google_workspace.factory import GoogleClientFactory
+from app.google_workspace.gmail.service import GmailService
+from app.google_workspace.scopes import ScopeBundle
+from app.google_workspace.sheets.service import SheetsService
+from app.google_workspace.slides.service import SlidesService
 from app.intake import IntakeService
 from app.telegram_bot import build_application
 from app.workspace_bridge import WorkspaceBridgeService
 from app.workspace_intel import WorkspaceIntelService
+from app.workspace_actions import UnavailableDocsWriter, WorkspaceActionService
 
 
 class _UnavailableWorkspaceAuthenticator:
@@ -44,6 +57,80 @@ class _UnavailableWorkspaceAuthenticator:
 
     def get_account_namespace(self) -> None:
         return None
+
+
+def _docs_writer_for_settings(settings: Settings):
+    """Construct a lazy, canonical Docs writer without reading credentials."""
+    if not settings.google_client_secrets_path or not settings.google_token_storage_path:
+        return UnavailableDocsWriter()
+    authenticator = GoogleAuthenticator(
+        settings.google_client_secrets_path,
+        SecureFileTokenStorage(settings.google_token_storage_path),
+        ScopeBundle.DOCS_WRITE.value,
+        settings.google_oauth_port,
+    )
+    client_factory = GoogleClientFactory(authenticator)
+    return LazyDocsWriteService(lambda: client_factory)
+
+
+def _drive_read_service_for_settings(
+    settings: Settings, factory: GoogleClientFactory
+) -> DriveReadService | None:
+    """Construct the optional, allowlist-bound Drive read service.
+
+    Returns ``None`` (Drive read capability unavailable) when no folder
+    allowlist is configured, or when the configured allowlist fails
+    ``DriveReadService``'s own validation (e.g. a duplicate alias) — this
+    never raises, and never disables the rest of the Workspace bundle.
+    """
+    if not settings.google_drive_allowed_folders:
+        return None
+    workspace_exports_dir = settings.nova_memory_db_path.resolve().parent / "workspace_exports"
+    allowlist = [
+        AllowlistedFolder(folder_id=folder_id, alias=alias)
+        for folder_id, alias in settings.google_drive_allowed_folders
+    ]
+    try:
+        return DriveReadService(factory, allowlist, workspace_exports_dir)
+    except DriveConfigError:
+        logging.getLogger(__name__).error(
+            "Drive folder allowlist configuration is invalid; Drive read "
+            "capability is unavailable. Other Workspace read services are "
+            "unaffected."
+        )
+        return None
+
+
+def _workspace_bundle_for_settings(settings: Settings) -> WorkspaceConnectorBundle | None:
+    """Construct the read-domain Workspace bundle without OAuth or network activity.
+
+    Returns ``None`` when the base OAuth configuration (client secrets +
+    token storage path) is absent — the whole bundle stays unavailable, same
+    as the existing Docs-write boundary. Once that base configuration is
+    present, Gmail/Calendar/Docs/Sheets/Slides are always constructed
+    together; Drive is independently optional (see
+    ``_drive_read_service_for_settings``) because it additionally requires
+    an explicit folder allowlist with no bearing on the other five services.
+    """
+    if not settings.google_client_secrets_path or not settings.google_token_storage_path:
+        return None
+    authenticator = GoogleAuthenticator(
+        settings.google_client_secrets_path,
+        SecureFileTokenStorage(settings.google_token_storage_path),
+        ScopeBundle.WORKSPACE_READ.value,
+        settings.google_oauth_port,
+    )
+    factory = GoogleClientFactory(authenticator)
+    return WorkspaceConnectorBundle(
+        authenticator=authenticator,
+        gmail=GmailService(factory),
+        calendar=CalendarService(factory, InMemoryCalendarAuditSink()),
+        docs=DocsService(factory),
+        sheets=SheetsService(factory),
+        slides=SlidesService(factory),
+        factory=factory,
+        drive=_drive_read_service_for_settings(settings, factory),
+    )
 
 
 def configure_logging() -> None:
@@ -172,15 +259,32 @@ def main() -> int:
         logger.error("Knowledge Operations schema initialization failed.")
         return 1
 
-    # Workspace OAuth remains optional and must not be probed at startup. The
-    # Stage-1 status handler accepts a missing bundle and reports it safely.
-    google_workspace: WorkspaceConnectorBundle | None = None
+    # Workspace OAuth remains optional and must not be probed at startup: this
+    # only constructs credential/service objects (no reconnect/refresh/network
+    # call). The Stage-1 status handler accepts a missing bundle and reports
+    # it safely.
+    google_workspace = _workspace_bundle_for_settings(settings)
 
     drafting = DraftingService(memory.database)
     try:
         drafting.initialize()
     except MemoryDatabaseError:
         logger.error("Drafting schema initialization failed.")
+        return 1
+
+    docs_writer = _docs_writer_for_settings(settings)
+
+    workspace_actions = WorkspaceActionService(
+        memory.database,
+        drafting=drafting,
+        dispatch=dispatch_svc,
+        approvals=approval_svc,
+        docs_writer=docs_writer,
+    )
+    try:
+        workspace_actions.initialize()
+    except MemoryDatabaseError:
+        logger.error("Workspace action schema initialization failed.")
         return 1
 
     workspace_bridge = WorkspaceBridgeService(
@@ -273,6 +377,7 @@ def main() -> int:
         conversation=conversation,
         drafting=drafting,
         workspace_bridge=workspace_bridge,
+        workspace_actions=workspace_actions,
     )
     application.run_polling()
     return 0

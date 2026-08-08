@@ -11,3 +11,9 @@ class DocumentContent:
     title: str
     paragraphs: tuple[str, ...]
     truncated: bool
+
+
+@dataclass(frozen=True)
+class CreatedDocument:
+    document_id: str
+    title: str

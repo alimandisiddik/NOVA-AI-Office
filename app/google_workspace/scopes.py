@@ -20,6 +20,7 @@ class GoogleScope(enum.Enum):
     # Read-only Workspace content scopes
     GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
     DOCS_READONLY = "https://www.googleapis.com/auth/documents.readonly"
+    DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
     SHEETS_READONLY = "https://www.googleapis.com/auth/spreadsheets.readonly"
     SLIDES_READONLY = "https://www.googleapis.com/auth/presentations.readonly"
 
@@ -31,8 +32,20 @@ class ScopeBundle(enum.Enum):
     DRIVE_READ = (*DEFAULT, GoogleScope.DRIVE_READONLY.value)
     GMAIL_READ = (*DEFAULT, GoogleScope.GMAIL_READONLY.value)
     DOCS_READ = (*DEFAULT, GoogleScope.DOCS_READONLY.value)
+    DOCS_WRITE = (*DEFAULT, GoogleScope.DRIVE_FILE.value)
     SHEETS_READ = (*DEFAULT, GoogleScope.SHEETS_READONLY.value)
     SLIDES_READ = (*DEFAULT, GoogleScope.SLIDES_READONLY.value)
+    # Union of every active read scope (§5a of docs/WAVE_7_SHARED_CONTRACTS.md)
+    # for constructing the one shared read-domain WorkspaceConnectorBundle.
+    WORKSPACE_READ = (
+        *DEFAULT,
+        GoogleScope.CALENDAR_READONLY.value,
+        GoogleScope.DRIVE_READONLY.value,
+        GoogleScope.GMAIL_READONLY.value,
+        GoogleScope.DOCS_READONLY.value,
+        GoogleScope.SHEETS_READONLY.value,
+        GoogleScope.SLIDES_READONLY.value,
+    )
 
 
 def canonicalize_scopes(scopes: list[str] | tuple[str, ...]) -> tuple[str, ...]:

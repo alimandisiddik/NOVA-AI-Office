@@ -16,11 +16,21 @@ from app.google_workspace.slides.service import SlidesService
 
 @dataclass(frozen=True)
 class WorkspaceConnectorBundle:
+    """Read-domain Workspace services sharing one authenticator/factory.
+
+    ``drive`` is optional: it requires an explicit, separately-configured
+    folder allowlist (``Settings.google_drive_allowed_folders``) and is
+    ``None`` when that allowlist is absent or invalid. Every other read
+    service requires only the base OAuth configuration and is always
+    present once the bundle itself is constructed — a missing/invalid Drive
+    allowlist never disables Gmail/Calendar/Docs/Sheets/Slides reads.
+    """
+
     authenticator: GoogleAuthenticator
     gmail: GmailService
     calendar: CalendarService
-    drive: DriveReadService
     docs: DocsService
     sheets: SheetsService
     slides: SlidesService
     factory: GoogleClientFactory
+    drive: DriveReadService | None = None

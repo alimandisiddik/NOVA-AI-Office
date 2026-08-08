@@ -220,13 +220,13 @@ def test_missing_or_malformed_expected_client_id_fails_closed(
         authenticator.reconnect()
 
 
-def test_exact_scope_comparison_rejects_partial_excess_and_missing_metadata(
+def test_scope_capability_comparison_rejects_partial_and_missing_metadata(
     monkeypatch: pytest.MonkeyPatch,
     secrets_path: Path,
     credential_data: dict[str, object],
 ) -> None:
     authenticator = make_authenticator(monkeypatch, secrets_path, InMemoryTokenStorage())
-    for scopes in ([GoogleScope.USERINFO_EMAIL.value], [*ScopeBundle.DEFAULT.value, GoogleScope.CALENDAR_READONLY.value], None):
+    for scopes in ([GoogleScope.USERINFO_EMAIL.value], None):
         candidate = dict(credential_data)
         if scopes is None:
             candidate.pop("scopes")
@@ -234,6 +234,10 @@ def test_exact_scope_comparison_rejects_partial_excess_and_missing_metadata(
             candidate["scopes"] = scopes
         with pytest.raises(AuthError):
             authenticator._validate_credentials(FakeCredentials(candidate))
+
+    allowed_superset = dict(credential_data)
+    allowed_superset["scopes"] = [*ScopeBundle.DEFAULT.value, GoogleScope.CALENDAR_READONLY.value]
+    authenticator._validate_credentials(FakeCredentials(allowed_superset))
 
 
 @pytest.mark.parametrize("oauth_port", [0, 8765])

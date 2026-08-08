@@ -1,3 +1,4 @@
+import inspect
 import logging
 import subprocess
 import sys
@@ -8,9 +9,10 @@ import pytest
 
 from app.dispatch.adapters import ProviderGatewayAgentAdapter
 from app.dispatch.approvals import ApprovalService
-from app.dispatch.errors import DispatchUnavailableError, UnsupportedCapabilityError
+from app.dispatch.errors import DispatchUnavailableError, InvalidRequestError, UnsupportedCapabilityError
+from app.dispatch.models import DispatchRequest
 from app.dispatch.registry import AgentRegistry
-from app.dispatch.service import DispatchService
+from app.dispatch.service import DispatchService, _SOURCE_TYPES
 from app.memory.database import MemoryDatabase
 from app.nightshift.classifier import PROHIBITED, REGISTERED_JOBS
 from app.nightshift.service import JOB_TRANSITIONS, NightShiftService
@@ -642,7 +644,45 @@ def test_structural_guard_no_fake_dispatch_class():
     assert "class FakeApprovalService" not in src
 
 
-def test_dispatch_public_interface_unchanged_by_5g():
-    result = subprocess.run(["git", "diff", "--", "app/dispatch/service.py", "app/dispatch/schema.py"], capture_output=True, text=True)
-    assert result.returncode == 0
-    assert result.stdout.strip() == ""
+def test_dispatch_changes_are_limited_to_the_8e_workspace_action_contract(dispatch_service):
+    """Sprint 8E adds one source/capability pair without a generic path."""
+    assert _SOURCE_TYPES == {
+        "control_tower_work_item",
+        "night_shift_job",
+        "telegram_direct",
+        "workspace_action",
+    }
+
+    for source_type in _SOURCE_TYPES - {"workspace_action"}:
+        record = dispatch_service.create_dispatch(
+            DispatchRequest(
+                source_type,
+                f"{source_type}:1",
+                "document_agent",
+                "read_only",
+                "fixture",
+                f"preserved-{source_type}",
+                "user:123",
+            ),
+            "user:123",
+        )
+        assert record.source_type == source_type
+
+    for source_type in _SOURCE_TYPES - {"workspace_action"}:
+        with pytest.raises(InvalidRequestError, match="workspace_action dispatch source"):
+            dispatch_service.create_dispatch(
+                DispatchRequest(
+                    source_type,
+                    f"{source_type}:workspace-write",
+                    "workspace_agent",
+                    "workspace_write",
+                    "workspace_action:1",
+                    f"blocked-workspace-write-{source_type}",
+                    "user:123",
+                ),
+                "user:123",
+            )
+
+    source = inspect.getsource(DispatchService._validate_request)
+    assert 'capability == "workspace_write" and request.source_type != "workspace_action"' in source
+    assert "create_private_document" not in inspect.getsource(DispatchService)

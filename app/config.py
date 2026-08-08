@@ -41,6 +41,11 @@ class Settings:
     google_client_secrets_path: Path | None = None
     google_token_storage_path: Path | None = None
     google_oauth_port: int = 0
+    # Bounded Drive folder allowlist for read-only Workspace operations.
+    # Empty by default; Drive read capability stays unavailable until this
+    # is explicitly configured. Does not gate Gmail/Calendar/Docs/Sheets/
+    # Slides read availability.
+    google_drive_allowed_folders: tuple[tuple[str, str], ...] = ()
 
     # Executive Dashboard Settings (default off; used only by app.dashboard.server)
     nova_dashboard_enabled: bool = False
@@ -133,6 +138,34 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
             "GOOGLE_CLIENT_SECRETS_PATH and GOOGLE_TOKEN_STORAGE_PATH must be configured together"
         )
 
+    # Bounded Drive folder allowlist: comma-separated "folder_id:alias" pairs.
+    # Unset/empty means Drive read capability stays unavailable; other
+    # Workspace read services are unaffected.
+    drive_folders_raw = environment.get("GOOGLE_DRIVE_ALLOWED_FOLDERS", "").strip()
+    drive_allowed_folders: list[tuple[str, str]] = []
+    if drive_folders_raw:
+        seen_aliases: set[str] = set()
+        for entry in drive_folders_raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if ":" not in entry:
+                raise ConfigurationError(
+                    "GOOGLE_DRIVE_ALLOWED_FOLDERS entries must be 'folder_id:alias' pairs"
+                )
+            folder_id, _, alias = entry.partition(":")
+            folder_id, alias = folder_id.strip(), alias.strip()
+            if not folder_id or not alias:
+                raise ConfigurationError(
+                    "GOOGLE_DRIVE_ALLOWED_FOLDERS entries must have a non-empty folder id and alias"
+                )
+            if alias in seen_aliases:
+                raise ConfigurationError(
+                    "GOOGLE_DRIVE_ALLOWED_FOLDERS aliases must be unique"
+                )
+            seen_aliases.add(alias)
+            drive_allowed_folders.append((folder_id, alias))
+
     dashboard_enabled_raw = environment.get("NOVA_DASHBOARD_ENABLED", "false").strip().lower()
     if dashboard_enabled_raw not in {"true", "false"}:
         raise ConfigurationError("NOVA_DASHBOARD_ENABLED must be true or false")
@@ -162,6 +195,7 @@ def load_settings(environment: Mapping[str, str] | None = None) -> Settings:
         google_client_secrets_path=Path(google_secrets) if google_secrets else None,
         google_token_storage_path=Path(google_token) if google_token else None,
         google_oauth_port=google_port,
+        google_drive_allowed_folders=tuple(drive_allowed_folders),
         nova_dashboard_enabled=dashboard_enabled_raw == "true",
         nova_dashboard_port=dashboard_port,
     )

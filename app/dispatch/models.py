@@ -16,6 +16,9 @@ class DispatchRequest:
     requested_by: str
     correlation_id: str | None = None
     max_attempts: int = 3
+    approval_requested_action: str | None = None
+    approval_expires_at: str | None = None
+    approval_requested_at: str | None = None
 
 
 @dataclass(frozen=True)

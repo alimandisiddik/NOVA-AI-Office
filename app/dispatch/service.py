@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Callable
 
 from app.dispatch.adapters import get_adapter
 from app.dispatch.approvals import ApprovalService
@@ -23,9 +24,9 @@ from app.security import SENSITIVE_CONTENT_PATTERN
 
 LOGGER = logging.getLogger(__name__)
 
-_SOURCE_TYPES = frozenset({"control_tower_work_item", "night_shift_job", "telegram_direct"})
+_SOURCE_TYPES = frozenset({"control_tower_work_item", "night_shift_job", "telegram_direct", "workspace_action"})
 _APPROVAL_FREE = frozenset({"read_only", "draft_only"})
-_APPROVAL_REQUIRED = frozenset({"external_communication", "publication"})
+_APPROVAL_REQUIRED = frozenset({"external_communication", "publication", "workspace_write"})
 _TRANSITIONS = {
     "pending": frozenset({"dispatching", "awaiting_approval", "cancelled"}),
     "awaiting_approval": frozenset({"approved", "rejected", "cancelled"}),
@@ -40,11 +41,12 @@ _OPAQUE_REFERENCE_BLOCKLIST = re.compile(r"(?:ssh-(?:rsa|ed25519)|-----BEGIN|\b(
 
 
 class DispatchService:
-    def __init__(self, database: MemoryDatabase, *, registry: AgentRegistry, approvals: ApprovalService) -> None:
+    def __init__(self, database: MemoryDatabase, *, registry: AgentRegistry, approvals: ApprovalService, clock: Callable[[], str] = utc_now) -> None:
         self.database = database
         self.repository = DispatchRepository(database)
         self.registry = registry
         self.approvals = approvals
+        self._clock = clock
 
     def initialize(self) -> None:
         try:
@@ -79,7 +81,20 @@ class DispatchService:
         self.registry.validate_capability(agent_id, capability)
         if capability not in _APPROVAL_FREE | _APPROVAL_REQUIRED:
             raise InvalidRequestError("Dispatch capability requires an explicit policy classification.")
-        return DispatchRequest(request.source_type, source_id, agent_id, capability, payload_ref, key, requested_by, correlation_id, request.max_attempts)
+        if capability == "workspace_write" and request.source_type != "workspace_action":
+            # workspace_write has no registered dispatch adapter: it is executed
+            # exclusively by WorkspaceActionService's own CAS-protected path,
+            # never through DispatchService.dispatch()/retry_dispatch(). Creating
+            # one via any other source (e.g. the generic /dispatch command) would
+            # bypass 8C freshness/fingerprint validation and, once approved,
+            # crash DispatchService.dispatch() on the unregistered adapter,
+            # leaving the record stuck in "running" with no valid recovery path.
+            raise InvalidRequestError("workspace_write capability requires a workspace_action dispatch source.")
+        return DispatchRequest(
+            request.source_type, source_id, agent_id, capability, payload_ref, key, requested_by,
+            correlation_id, request.max_attempts, request.approval_requested_action,
+            request.approval_expires_at, request.approval_requested_at,
+        )
 
     @staticmethod
     def _same_request(existing: DispatchRecord, request: DispatchRequest) -> bool:
@@ -99,7 +114,7 @@ class DispatchService:
                 return existing
             raise DuplicateDispatchError("Idempotency key conflicts with an existing dispatch.")
         status = "pending" if request.capability in _APPROVAL_FREE else "awaiting_approval"
-        now = utc_now()
+        now = request.approval_requested_at or self._clock()
         record = DispatchRecord(str(uuid.uuid4()), request.source_type, request.source_id, request.agent_id,
                                 request.capability, request.payload_ref, status, 0, request.max_attempts,
                                 request.idempotency_key, request.correlation_id, request.requested_by, "", now, now)
@@ -108,8 +123,11 @@ class DispatchService:
             self.repository.insert_dispatch_in(connection, record, actor)
             if status == "awaiting_approval":
                 from app.dispatch.models import ApprovalRequest
-                approval = ApprovalRequest(str(uuid.uuid4()), record.dispatch_id,
-                    f"Approve {record.capability} for {record.agent_id}", "requested", actor, utc_now())
+                approval = ApprovalRequest(
+                    str(uuid.uuid4()), record.dispatch_id,
+                    request.approval_requested_action or f"Approve {record.capability} for {record.agent_id}",
+                    "requested", actor, now, expires_at=request.approval_expires_at,
+                )
                 self.repository.insert_approval_in(connection, approval, actor)
         return record
 
