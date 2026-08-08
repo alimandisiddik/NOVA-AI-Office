@@ -34,6 +34,7 @@ from app.conversation import ConversationService
 from app.google_workspace.bundle import WorkspaceConnectorBundle
 from app.intake import IntakeService
 from app.telegram_bot import build_application
+from app.workspace_intel import WorkspaceIntelService
 
 
 def configure_logging() -> None:
@@ -167,6 +168,11 @@ def main() -> int:
     # Workspace OAuth remains optional and must not be probed at startup. The
     # Stage-1 status handler accepts a missing bundle and reports it safely.
     google_workspace: WorkspaceConnectorBundle | None = None
+    workspace_intel = (
+        WorkspaceIntelService(google_workspace.gmail, google_workspace.calendar)
+        if google_workspace is not None
+        else None
+    )
 
     intake = IntakeService(
         memory.database,
@@ -233,6 +239,7 @@ def main() -> int:
         knowledge,
         executive_brief,
         google_workspace=google_workspace,
+        workspace_intel=workspace_intel,
         intake=intake,
         conversation=conversation,
     )
