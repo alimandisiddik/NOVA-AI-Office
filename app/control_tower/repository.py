@@ -153,6 +153,14 @@ class ControlTowerRepository:
             row = connection.execute("SELECT * FROM control_tower_decisions WHERE decision_id = ?", (decision_id,)).fetchone()
         return None if row is None else _decision(row)
 
+    def list_decisions_for_project(self, project_id: int) -> list[Decision]:
+        with self.database.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM control_tower_decisions WHERE project_id = ? ORDER BY effective_date, decision_id",
+                (project_id,),
+            ).fetchall()
+        return [_decision(row) for row in rows]
+
     def create_approval_link(self, approval: Approval, *, actor: str, correlation_id: str | None = None) -> None:
         with self.database.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
