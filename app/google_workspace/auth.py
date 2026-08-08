@@ -183,6 +183,7 @@ class GoogleAuthenticator:
         self._scopes = canonicalize_scopes(requested_scopes)
         self._oauth_port = self._validate_port(oauth_port)
         self._audit_logs: list[AuthAuditLog] = []
+        self._account_namespace_cache: str | None = None
 
     @staticmethod
     def _validate_port(port: object) -> int:
@@ -347,10 +348,12 @@ class GoogleAuthenticator:
             raise AuthError("OAuth reconnect failed") from None
 
         self._audit("reconnect", True)
+        self._account_namespace_cache = None
 
     def local_disconnect(self) -> None:
         """Remove only local cached credentials; this does not revoke Google access."""
         self._storage.delete_token()
+        self._account_namespace_cache = None
         self._audit("local_disconnect", True)
 
     def get_connection_status(self) -> dict[str, Any]:
@@ -376,6 +379,8 @@ class GoogleAuthenticator:
         claim is a stable account identifier.  Any unavailable dependency,
         invalid credential, or provider failure fails closed as ``None``.
         """
+        if self._account_namespace_cache is not None:
+            return self._account_namespace_cache
         try:
             credentials = self.get_credentials(require_valid=False)
             if credentials is None or not getattr(credentials, "valid", False):
@@ -396,9 +401,11 @@ class GoogleAuthenticator:
         except Exception:
             return None
 
-        return hashlib.sha256(
+        namespace = hashlib.sha256(
             b"nova-google-account-namespace\x00" + subject.encode("utf-8")
         ).hexdigest()[:12]
+        self._account_namespace_cache = namespace
+        return namespace
 
     def get_audit_trail(self) -> tuple[AuthAuditLog, ...]:
         """Return immutable audit records detached from internal list state."""
