@@ -457,7 +457,21 @@ acceptable deviation — corrected as follows:
 Full regression re-run after the fix; see the review record for the exact
 pass count.
 
-## Wave 7 — Executive Operations & Workspace Automation (architecture frozen, pending final Control Tower sign-off)
+## Wave 7 — Executive Operations & Workspace Automation (Stages 1–3 complete; Sprint 8E revised)
+
+**Current controlling status (Sprint 8E Architecture Revision):** G3 Stage 3
+integration is complete and merged; Stage 4 has not started. The earlier broad
+8E write proposal is superseded by `docs/SPRINT_8E.md`. Sprint 8E now proves
+only `docs_memo -> create_docs_file`: current-ready 8C lineage validation,
+exact action-bound approval, canonical payload-integrity validation, CAS claim,
+typed private Docs creation, metadata-only audit, and `outcome_unknown`
+without automatic retry. Its frozen Docs capability is `documents.create`
+followed by `documents.batchUpdate`/`InsertTextRequest`; `drive.file` is the
+least-privilege scope choice for that app-created-document implementation, not
+a claim that it is the only valid Docs scope generally. Gmail, Calendar, Drive
+sharing/permissions, Sheets, Slides, Docs edits, bulk actions, and generic API
+execution are out of scope. This revision is documentation-only and has human
+approval.
 
 Status: Architecture/contracts FROZEN by Claude (Technical Architect),
 revised twice — first to cover the full target Workspace surface, then per
@@ -559,3 +573,65 @@ No secrets were accessed, no runtime Google OAuth authentication was
 performed, no external Google API action was performed, and no
 implementation code was added during either architecture pass — `git diff`
 against both passes is documentation-only.
+
+## Wave 7 — G4 revision (independent review findings closed)
+
+Status: Sprint 8E's Docs-write safety spine was independently reviewed and
+found sound (approval binding, CAS, freshness/integrity, `outcome_unknown`,
+audit minimization, and the two corrected G4 tests were all verified against
+the actual source, not just documentation). That review also found and this
+pass closes four findings:
+
+- **Production defect, fixed:** `WorkspaceConnectorBundle` was never
+  constructed in `app/main.py` — hardcoded to `None` regardless of
+  configuration, silently disabling `/workspacestatus`, `/inbox`, `/agenda`,
+  and 8D's real-account bridging even with valid OAuth configuration. Root
+  cause: `DriveReadService` structurally requires a non-empty folder
+  allowlist with no configuration surface for it anywhere in the repo. Fixed
+  by adding `GOOGLE_DRIVE_ALLOWED_FOLDERS` (bounded, comma-separated
+  `folder_id:alias` pairs; empty/unset by default; rejects malformed entries
+  at config-load time) and a new `app/main.py` construction path
+  (`_workspace_bundle_for_settings`) that builds the real bundle whenever the
+  existing `GOOGLE_CLIENT_SECRETS_PATH`/`GOOGLE_TOKEN_STORAGE_PATH` pair is
+  configured — reusing the canonical `GoogleAuthenticator`/
+  `GoogleClientFactory` verbatim, with no OAuth/browser/refresh/network call
+  at construction (verified by a `socket.create_connection`-forbidding test
+  exercising the real `_workspace_bundle_for_settings` path directly).
+- **Partial-capability decision:** `WorkspaceConnectorBundle.drive` is now
+  `DriveReadService | None = None` (previously mandatory). A missing or
+  invalid Drive allowlist disables only Drive read capability — Gmail,
+  Calendar, Docs, Sheets, and Slides construct and remain available
+  regardless, since none of them depend on a folder allowlist. This was
+  chosen over keeping the bundle all-or-none because no active Wave 7
+  consumer (`workspacestatus_command`, `WorkspaceIntelService`,
+  `WorkspaceBridgeService`) dereferences `bundle.drive` at all — the change
+  is additive and zero-risk to every existing call site, and matches §5a's
+  original per-service failure-isolation principle ("each service's failure
+  is isolated, never cascading") more faithfully than the previous
+  accidental all-or-none behavior did.
+- **UX defect, fixed:** `/docstatus` for an `outcome_unknown` action now
+  explicitly states, in substance, "WRITE OUTCOME COULD NOT BE CONFIRMED. DO
+  NOT RETRY AUTOMATICALLY. MANUAL RECONCILIATION REQUIRED." (previously only
+  "RECONCILIATION REQUIRED."), matching `docs/SPRINT_8E.md` §5's frozen
+  wording. No document body or provider secret is exposed.
+  `docs/WAVE_7_SHARED_CONTRACTS.md` AD-W7-04 and `docs/SPRINT_8E.md` §3 were
+  corrected to match the as-built execution architecture: `app/dispatch/
+  adapters.py` was never touched and no `GoogleWorkspaceAgentAdapter` exists;
+  `WorkspaceActionService` owns the entire external-write execution CAS
+  independently of `DispatchService.dispatch()`, which is safer than the
+  originally-documented adapter-execution design, not a shortfall — this is
+  now recorded as the frozen as-built invariant rather than an open gap.
+  AD-W7-03 was corrected to describe read/write separation as a class-level
+  (not file-level) guarantee, matching `DocsWriteService` living beside
+  `DocsService` in `app/google_workspace/docs/service.py`.
+
+New/strengthened tests: `tests/test_config_drive_allowlist.py` (parsing:
+empty, valid, malformed, duplicate-alias rejection),
+`tests/test_workspace_bundle_construction.py` (real `app/main.py` path:
+unconfigured → `None`; configured without Drive allowlist → partial bundle,
+Drive `None`, other five services present; configured with a valid Drive
+allowlist → full bundle; zero network calls via a `socket.create_connection`
+guard; invalid/duplicate-alias allowlist degrades to `drive=None` without
+raising), and `tests/test_workspace_actions.py`
+(`test_docstatus_outcome_unknown_message_states_no_retry_and_reconciliation`).
+Full regression: see the G4 review record for the exact pass count.

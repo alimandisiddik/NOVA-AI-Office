@@ -178,9 +178,15 @@ def test_main_google_workspace_defined_before_workspace_bridge_construction() ->
     """Regression guard for the G3 initialization-order defect: workspace_bridge's
     authenticator selection reads the `google_workspace` name, so that name must be
     assigned earlier in main(), or Python raises UnboundLocalError at startup
-    before the bot ever wires a handler."""
+    before the bot ever wires a handler.
+
+    G4 update: `google_workspace` is now the real, settings-derived
+    WorkspaceConnectorBundle (previously hardcoded to `None` — the G4 review's
+    confirmed production defect), so the literal assignment text changed; the
+    ordering guarantee this test exists to prove is unchanged.
+    """
     source = inspect.getsource(main_module.main)
-    namespace_assignment = source.index("google_workspace: WorkspaceConnectorBundle | None = None")
+    namespace_assignment = source.index("google_workspace = _workspace_bundle_for_settings(settings)")
     bridge_construction = source.index("workspace_bridge = WorkspaceBridgeService(")
     assert namespace_assignment < bridge_construction
 
@@ -214,11 +220,12 @@ def test_main_authenticator_selection_uses_bundle_authenticator_when_present() -
     assert isinstance(selected, main_module._UnavailableWorkspaceAuthenticator)
 
 
-def test_stage3_wiring_has_no_premature_workspace_execution_path() -> None:
+def test_stage4_wiring_has_a_fail_closed_workspace_action_path() -> None:
     source = "\n".join(
         Path(path).read_text(encoding="utf-8")
         for path in ("app/main.py", "app/telegram_bot.py", "app/drafting/service.py", "app/workspace_bridge/service.py")
     )
 
-    assert "workspace_actions" not in source
+    assert "WorkspaceActionService" in source
+    assert "UnavailableDocsWriter" in source
     assert "ready_for_action" not in Path("app/workspace_bridge/service.py").read_text(encoding="utf-8")

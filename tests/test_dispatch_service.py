@@ -89,6 +89,25 @@ def test_synchronize_stale_update_is_non_mutating(dispatch_svc):
     assert result.status == "pending"
 
 
+def test_workspace_write_capability_rejected_outside_workspace_action_source(dispatch_svc):
+    # workspace_write has no registered dispatch adapter (get_adapter raises
+    # DispatchUnavailableError) — it is executed only through
+    # WorkspaceActionService's own CAS-protected path, never via
+    # DispatchService.dispatch(). If it could be created through the generic
+    # /dispatch surface (source_type="telegram_direct") and then approved
+    # through the generic /approve fallback, DispatchService.dispatch() would
+    # crash on the missing adapter and strand the record in "running" forever.
+    req = DispatchRequest("telegram_direct", "msg:8", "workspace_agent", "workspace_write", "ref", "key8", "user:123")
+    with pytest.raises(InvalidRequestError):
+        dispatch_svc.create_dispatch(req, "user:123")
+
+
+def test_workspace_write_capability_allowed_for_workspace_action_source(dispatch_svc):
+    req = DispatchRequest("workspace_action", "1", "workspace_agent", "workspace_write", "workspace_action:1", "key9", "user:123")
+    record = dispatch_svc.create_dispatch(req, "user:123")
+    assert record.status == "awaiting_approval"
+
+
 def test_adapter_timeout_transitions_to_timed_out(dispatch_svc, monkeypatch):
     from app.dispatch.models import DispatchResult
 

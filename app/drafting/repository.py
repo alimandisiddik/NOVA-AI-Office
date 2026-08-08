@@ -31,6 +31,23 @@ class DraftingRepository:
         ).fetchone()
         return self._action(row) if row is not None else None
 
+    def get_current_ready_action_in(self, connection: sqlite3.Connection, action_id: int) -> PreparedWorkspaceAction | None:
+        """Return only the current executable Docs memo revision."""
+        row = connection.execute(
+            """
+            SELECT * FROM prepared_workspace_actions AS action
+            WHERE action.id = ?
+              AND action.content_type = 'docs_memo'
+              AND action.status = 'ready_for_action'
+              AND NOT EXISTS (
+                  SELECT 1 FROM prepared_workspace_actions AS successor
+                  WHERE successor.supersedes_id = action.id
+              )
+            """,
+            (action_id,),
+        ).fetchone()
+        return self._action(row) if row is not None else None
+
     def insert_action_in(
         self, connection: sqlite3.Connection, action: PreparedWorkspaceAction, *, event: str, detail: str = ""
     ) -> PreparedWorkspaceAction:

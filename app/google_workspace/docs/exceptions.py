@@ -50,3 +50,11 @@ class DocsProviderError(DocsServiceError):
     category = "provider_failure"
     retryable = True
     message = "Google Docs provider request failed"
+
+
+class DocsSubmissionUncertainError(DocsServiceError):
+    """A post-create failure whose provider outcome is ambiguous."""
+
+    category = "outcome_unknown"
+    submission_started = True
+    message = "Google Docs submission outcome is unknown"
